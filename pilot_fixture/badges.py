@@ -1,7 +1,7 @@
 """Return the visible badge for a task state."""
 
 
-BADGE_LABELS = {"active": "Active", "paused": "Active", "done": "Done"}
+BADGE_LABELS = {"active": "Active", "paused": "Paused", "done": "Done"}
 
 
 def badge_label(state: str) -> str:
