@@ -8,7 +8,9 @@ Use Paseo 0.16.1 or later with a daemon runtime that supports `node:sqlite`. The
 
 Check that trusted plugins are enabled for this daemon with `paseo daemon config get pluginsEnabled`. The daemon owner must explicitly opt in when the switch is off. Trusted plugins run with the host user’s file and process access.
 
-Check out the reviewed revision on the daemon machine. From that checkout, install the locked build dependencies and use the Paseo CLI that belongs to the daemon. Use `--home` with the pilot daemon's directory when it differs from the default.
+Once a version has been released to npm, install that exact version on the daemon machine with `paseo plugin install npm:@kelvicthrust/paseo-task-inbox@<version>` (replace `<version>` with the release number). Run `paseo plugin ls task-inbox` to verify it is running.
+
+For a source install, check out the reviewed revision on the daemon machine. From that checkout, install the locked build dependencies and use the Paseo CLI that belongs to the daemon. Use `--home` with the pilot daemon's directory when it differs from the default.
 
 ```sh
 npm ci --ignore-scripts --include=dev
@@ -50,3 +52,21 @@ npm ci --ignore-scripts
 npm run typecheck
 npm test
 ```
+
+## Release to npm and GitHub
+
+**Rehearse a build** from **Actions → Release → Run workflow**. Download the artifact for the selected revision, then run `shasum -a 256 -c SHA256SUMS` in the extracted directory. It contains the tested Paseo plugin tarball. Manual runs stop after uploading the build artifact.
+
+**Set up npm once.** When ready to distribute the first version, a maintainer of the `@kelvicthrust` scope stages the verified archive from an authenticated npm session. For version 0.1.0, run the following command in the extracted artifact directory.
+
+```sh
+npm stage publish ./kelvicthrust-paseo-task-inbox-0.1.0.tgz --access public --registry=https://registry.npmjs.org/
+```
+
+Approve the staged version on npm when it is ready for installation. From a fresh directory, download that exact version with `npm pack @kelvicthrust/paseo-task-inbox@0.1.0` and verify it against the original `SHA256SUMS`. Create the initial GitHub release with tag `v0.1.0` at the rehearsed commit and attach the verified tarball and checksum.
+
+When the next version bump is ready, open the npm package settings and add a GitHub Actions trusted publisher with owner **kelvicthrust**, repository **paseo-task-inbox**, workflow **release.yml**, and an empty environment. Enable **Allow npm publish** and **Allow npm dist-tag**. Merge the version bump within two days of adding the publisher so its first OIDC publish validates the connection. [Staging a new npm package](https://github.blog/changelog/2026-10-02-npm-staged-publishing-now-supports-creating-new-packages/) · [npm trusted publishers](https://docs.npmjs.com/trusted-publishers/)
+
+**Release subsequent versions** by running `npm version patch --no-git-tag-version` (or a minor or major bump), reviewing the package and lockfile changes, and merging the release PR into `main`. A higher stable version triggers the workflow. It tests and packs the plugin, publishes under `next`, compares the npm download with the tested archive, promotes it to `latest`, and creates the GitHub release and tag with the tarball and its checksum.
+
+If a job fails after npm accepts a version, rerun the failed jobs on the original workflow run to reuse its verified artifact. If npm already holds different bytes for that version, prepare a new version.

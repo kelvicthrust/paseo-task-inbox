@@ -3,16 +3,24 @@
   "version": "0.1.0",
   "private": true,
   "description": "Collect workspace bugs and send a verified batch to an existing Paseo chat.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kelvicthrust/paseo-task-inbox.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=24.20.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test test/*.test.ts",
+    "pack:release": "node scripts/release-package.mjs pack",
+    "test:package": "node scripts/release-package.mjs test"
+  },
+  "dependencies": {
+    "@getpaseo/client": "0.16.1"
   },
   "devDependencies": {
-    "@getpaseo/client": "0.16.1",
     "@getpaseo/plugin": "0.16.1",
     "@types/node": "26.6.6",
     "@types/react": "19.2.18",
