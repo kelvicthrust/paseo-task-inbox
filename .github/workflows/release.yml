@@ -5,11 +5,16 @@ on:
     branches: [main]
     paths: [package.json]
   workflow_dispatch:
+    inputs:
+      finalize_local_publish:
+        description: Finalize an npm version published locally
+        type: boolean
+        default: false
 
 permissions: {}
 
 concurrency:
-  group: release-${{ github.event_name == 'push' && 'main' || github.run_id }}
+  group: release-${{ (github.event_name == 'push' || inputs.finalize_local_publish) && 'main' || github.run_id }}
   queue: max
 
 defaults:
@@ -43,6 +48,7 @@ jobs:
         id: version
         env:
           BEFORE: ${{ github.event.before }}
+          FINALIZE_LOCAL: ${{ inputs.finalize_local_publish }}
         run: |
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             previous=$(git show "$BEFORE:package.json" | jq -er '.version')
@@ -59,6 +65,14 @@ jobs:
             fi
           else
             version=$(node scripts/check-release-version.ts)
+            if [[ "$FINALIZE_LOCAL" == true ]]; then
+              if [[ "$GITHUB_REPOSITORY" != kelvicthrust/paseo-task-inbox ]] ||
+                 [[ "$GITHUB_REF" != refs/heads/main && "$GITHUB_REF" != "refs/tags/v$version" ]] ||
+                 ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+                echo "Finalize from the source repository's main branch or its matching release tag." >&2
+                exit 1
+              fi
+            fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -139,10 +153,40 @@ jobs:
           (cd dist/release && cmp SHA256SUMS <(sha256sum "kelvicthrust-paseo-task-inbox-$VERSION.tgz"))
           node scripts/publish-release-npm.ts "$VERSION" dist/release
 
+  verify_local:
+    name: Verify locally published npm package
+    if: github.event_name == 'workflow_dispatch' && inputs.finalize_local_publish
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: dist/release
+      - name: Verify checksum and public npm download
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          (cd dist/release && cmp SHA256SUMS <(sha256sum "kelvicthrust-paseo-task-inbox-$VERSION.tgz"))
+          node scripts/publish-release-npm.ts "$VERSION" dist/release --verify-only
+
   github:
     name: Publish GitHub release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'kelvicthrust/paseo-task-inbox'
-    needs: [version, build, npm]
+    if: >-
+      !cancelled() && github.repository == 'kelvicthrust/paseo-task-inbox' &&
+      needs.version.result == 'success' && needs.build.result == 'success' &&
+      (needs.npm.result == 'success' || needs.verify_local.result == 'success')
+    needs: [version, build, npm, verify_local]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

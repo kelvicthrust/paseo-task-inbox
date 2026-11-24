@@ -12,10 +12,12 @@ const name = `@kelvicthrust/${basename}`;
 const nodeAbortSignal = AbortSignal as typeof AbortSignal & {
   timeout(milliseconds: number): AbortSignal;
 };
-const [, , version, directory] = process.argv;
-if (!version || !stableVersion.test(version) || !directory) {
-  throw new Error('Usage: node scripts/publish-release-npm.ts <X.Y.Z> <release directory>');
+const [, , version, directory, mode, ...extra] = process.argv;
+if (!version || !stableVersion.test(version) || !directory ||
+    (mode !== undefined && mode !== '--verify-only') || extra.length) {
+  throw new Error('Usage: node scripts/publish-release-npm.ts <X.Y.Z> <release directory> [--verify-only]');
 }
+const verifyOnly = mode === '--verify-only';
 const archive = resolve(directory, `kelvicthrust-${basename}-${version}.tgz`);
 const expected = readFileSync(archive);
 const integrity = 'sha512-' + createHash('sha512').update(expected).digest('base64');
@@ -34,7 +36,7 @@ async function metadata(): Promise<RegistryMetadata> {
     },
   );
   if (response.status === 404) {
-    throw new Error(`${name} is unavailable on npm. The initial package must exist before configuring its trusted publisher.`);
+    throw new Error(`${name} is unavailable on npm. Complete local publication of the initial package first.`);
   }
   if (!response.ok) throw new Error(`Cannot read ${name} on npm (HTTP ${response.status}).`);
   return (await response.json()) as RegistryMetadata;
@@ -53,12 +55,14 @@ function npm(...args: string[]) {
 }
 
 const data = await metadata();
-checkLatest(data, version);
+if (!verifyOnly) checkLatest(data, version);
 const existing = data.versions[version];
 if (existing) {
   if (existing.dist.integrity !== integrity) {
     throw new Error(`${name}@${version} already exists on npm with different bytes.`);
   }
+} else if (verifyOnly) {
+  throw new Error(`${name}@${version} is unavailable on npm. Complete local publication of that version first.`);
 } else {
   npm('publish', archive, '--ignore-scripts', '--access=public', '--tag=next');
 }
@@ -86,6 +90,6 @@ while (true) {
   await delay(30_000);
 }
 
-if (checkLatest(await metadata(), version) !== version) {
+if (!verifyOnly && checkLatest(await metadata(), version) !== version) {
   npm('dist-tag', 'add', `${name}@${version}`, 'latest');
 }
