@@ -38,6 +38,7 @@ export interface Batch {
   attemptedAt: number;
   cursor: TimelineCursor | null;
   turnId: string | null;
+  historyChanged?: boolean;
   interrupted: boolean;
   idleSince: number | null;
   assistant: { messageId?: string; line: string; overflow: boolean } | null;

@@ -18,6 +18,7 @@ export interface InboxAgent {
   status: "idle" | "running" | "initializing" | "error" | "closed";
   activeTurn: string | null;
   pendingPermission: boolean;
+  resumable?: boolean;
 }
 
 export interface TimelineCursor {
@@ -27,7 +28,7 @@ export interface TimelineCursor {
 
 export type TimelineEntry = { seq: number; turnId?: string } & (
   | { type: "user_message"; clientMessageId?: string; text: string }
-  | { type: "assistant_message"; messageId?: string; text: string }
+  | { type: "assistant_message"; messageId?: string; text: string; complete?: boolean }
   | { type: "outcome"; batchId: string }
   | { type: "other" }
 );
@@ -36,6 +37,7 @@ export interface TimelinePage {
   epoch: string;
   firstSeq: number;
   latestSeq: number;
+  endSeq: number | null;
   reset: boolean;
   hasNewer: boolean;
   entries: TimelineEntry[];

@@ -129,6 +129,9 @@ export function readTimeline(batch: Batch, items: Item[], rows: TimelineEntry[])
     }
     if (!batch.turnId || row.turnId !== batch.turnId || batch.interrupted) continue;
     if (row.type === "user_message") batch.interrupted = true;
-    if (row.type === "assistant_message") readAssistant(batch, items, row);
+    if (row.type === "assistant_message") {
+      readAssistant(batch, items, row);
+      if (row.complete) flushAssistant(batch, items);
+    }
   }
 }

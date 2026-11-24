@@ -86,9 +86,15 @@ function finish(state: WorkspaceState, batch: Batch, blocker?: string) {
   state.annotations.push({ agentId: batch.agentId, directory: batch.directory, outcome, attempt: null });
 }
 
+function eligibleChat(agent: InboxAgent | null, agentId: string, workspaceId: string): agent is InboxAgent {
+  return agent?.id === agentId && agent.workspaceId === workspaceId &&
+    (agent.status !== "closed" || agent.resumable === true);
+}
+
 function waitingFor(agent: InboxAgent): string | null {
   if (agent.pendingPermission) return "Waiting for input or approval in the selected chat.";
   if (agent.status === "error") return "The selected chat needs attention before dispatch.";
+  if (agent.status === "closed") return "Waiting for the selected chat to resume.";
   if (agent.status !== "idle" || agent.activeTurn !== null) return "Waiting for the selected chat to become idle.";
   return null;
 }
@@ -183,14 +189,14 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
         changeBatch(workspaceId, batch.id, (_state, current) => {
           current.cursor = resetCursor;
           current.turnId = null;
+          current.historyChanged ||= page.reset || (batch.cursor !== null && batch.cursor.epoch !== page.epoch);
           current.assistant = null;
           current.interrupted = false;
           current.idleSince = null;
         });
         continue;
       }
-      const last = page.entries.at(-1);
-      if (last) cursor = { epoch: page.epoch, seq: last.seq };
+      if (page.endSeq !== null && page.endSeq > cursor.seq) cursor = { epoch: page.epoch, seq: page.endSeq };
       const nextCursor = cursor;
       changeBatch(workspaceId, batch.id, (state, current) => {
         readTimeline(current, state.items, page.entries);
@@ -227,7 +233,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
       epoch: page.epoch, seq: page.latestSeq,
     }));
     const ready = await host.agent(batch.agentId);
-    if (!ready || ready.id !== batch.agentId || ready.workspaceId !== workspace.id || ready.status === "closed") {
+    if (!eligibleChat(ready, batch.agentId, workspace.id)) {
       changeBatch(workspace.id, batch.id, (state, current) => {
         finish(state, current, "The selected chat is unavailable in this workspace.");
       });
@@ -273,13 +279,19 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
 
   async function advance(workspaceId: string, initial: Batch) {
     const workspace = await host.workspace(workspaceId);
-    const agent = await host.agent(initial.agentId);
+    let agent = await host.agent(initial.agentId);
     if (!workspace || workspace.id !== workspaceId || workspace.directory !== initial.directory ||
-        !agent || agent.id !== initial.agentId || agent.workspaceId !== workspaceId || agent.status === "closed") {
+        !eligibleChat(agent, initial.agentId, workspaceId)) {
       changeBatch(workspaceId, initial.id, (state, batch) => {
         finish(state, batch, "The selected chat is unavailable in this workspace.");
       });
       return;
+    }
+    if (initial.phase === "queued" && agent.status === "closed") {
+      // The stock history read lazily resumes this exact unarchived chat without issuing a prompt.
+      await host.timeline(initial.agentId, null);
+      agent = await host.agent(initial.agentId);
+      if (!eligibleChat(agent, initial.agentId, workspaceId)) return;
     }
     const caughtUp = initial.phase === "queued" || await followTimeline(workspaceId, initial);
     const batch = getState(workspaceId).batch;
@@ -304,8 +316,8 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
           current.status = "working";
           current.detail = "Work is underway in the selected chat.";
         }
-        const turnEnded = current.interrupted || currentAgent.activeTurn !== current.turnId ||
-          currentAgent.status === "idle" || currentAgent.status === "error";
+        const turnEnded = current.interrupted || currentAgent.status === "idle" || currentAgent.status === "error" ||
+          (currentAgent.activeTurn !== null && currentAgent.activeTurn !== current.turnId);
         if (current.turnId && turnEnded) {
           flushAssistant(current, state.items);
           current.idleSince ??= now();
@@ -321,7 +333,9 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
     changeBatch(workspaceId, batch.id, (state, current) => {
       const items = selectedItems(state, current);
       if (!current.turnId && now() >= current.attemptedAt + reconcileGrace) {
-        finish(state, current, "The sent batch could not be matched to a turn in the selected chat.");
+        finish(state, current, current.historyChanged
+          ? "Paseo’s chat history changed and no matching turn could be verified. Check the selected chat for results."
+          : "The sent batch could not be matched to a turn in the selected chat.");
       } else if (current.idleSince !== null && now() >= current.idleSince + idleGrace) {
         for (const item of items) {
           if (item.status === "working" && !item.candidate) {
@@ -360,8 +374,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
         resolveAnnotation(workspaceId, outcome.batchId);
         return;
       }
-      const last = page.entries.at(-1);
-      if (last) cursor = { epoch: page.epoch, seq: last.seq };
+      if (page.endSeq !== null && page.endSeq > cursor.seq) cursor = { epoch: page.epoch, seq: page.endSeq };
       if (!page.hasNewer) {
         if (now() >= attempt.at + reconcileGrace) resolveAnnotation(workspaceId, outcome.batchId, true);
         break;
@@ -380,7 +393,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
       const workspace = await host.workspace(workspaceId);
       const agent = await host.agent(agentId);
       if (!workspace || workspace.id !== workspaceId || workspace.directory !== annotation.directory ||
-          !agent || agent.id !== agentId || agent.workspaceId !== workspaceId || agent.status === "closed") {
+          !eligibleChat(agent, agentId, workspaceId)) {
         resolveAnnotation(workspaceId, outcome.batchId, true);
         continue;
       }
@@ -411,7 +424,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
     async view(workspaceId: string) {
       await getWorkspace(workspaceId);
       const agents = (await host.agents(workspaceId))
-        .filter((agent) => agent.workspaceId === workspaceId && agent.status !== "closed")
+        .filter((agent) => eligibleChat(agent, agent.id, workspaceId))
         .map(({ id, label, provider }) => ({ id, label, provider }));
       const { items, batch } = getState(workspaceId);
       return {
@@ -456,7 +469,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
       }
       const workspace = await getWorkspace(workspaceId);
       const agent = await host.agent(agentId);
-      if (!agent || agent.id !== agentId || agent.workspaceId !== workspaceId || agent.status === "closed") {
+      if (!eligibleChat(agent, agentId, workspaceId)) {
         throw new Error("Choose an existing chat from this workspace.");
       }
       const repository = await host.repository(workspace);

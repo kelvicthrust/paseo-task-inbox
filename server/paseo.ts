@@ -3,7 +3,7 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { basename } from "node:path";
 import { batchOutcomeKind, batchOutcomeVersion } from "../shared/outcome.ts";
 import { readOrigin, verifyPullRequest } from "./github.ts";
-import type { InboxAgent, InboxHost, InboxWorkspace } from "./inbox-types.ts";
+import type { InboxAgent, InboxHost, InboxWorkspace, TimelineEntry } from "./inbox-types.ts";
 
 function visibleWorkspace(workspace: PaseoWorkspace): InboxWorkspace | null {
   if (workspace.internal || workspace.background || workspace.archivingAt) return null;
@@ -24,6 +24,7 @@ function visibleAgent(agent: PaseoAgent): InboxAgent | null {
     workspaceId: agent.workspaceId ?? null,
     status: agent.status,
     activeTurn: agent.activeTurn?.turnId ?? null,
+    resumable: agent.status === "closed" && agent.persistence != null,
     pendingPermission: agent.pendingPermissions.length > 0 || agent.attentionReason === "permission",
   };
 }
@@ -75,24 +76,40 @@ export function createPaseoHost(paseo: Paseo, getPluginApi: () => Paseo | undefi
         projection: "canonical",
         limit: cursor ? 100 : 1,
       });
-      if (response.error || response.agentId !== agentId || !response.epoch ||
-          response.projection !== "canonical") {
-        throw new Error("The selected chat’s canonical timeline is unavailable.");
+      if (response.error || response.agentId !== agentId || !response.epoch) {
+        throw new Error("The selected chat’s timeline is unavailable.");
+      }
+      const reset = response.reset || response.staleCursor || response.gap;
+      const projected = response.projection === "projected";
+      let endSeq = response.endCursor?.seq ?? null;
+      if (projected && !reset && !response.hasNewer && endSeq !== null &&
+          (response.agent?.status === "running" || response.agent?.activeTurn != null)) {
+        const growing = response.entries.find(({ item, seqEnd }) =>
+          item.type === "assistant_message" && seqEnd === response.window.maxSeq);
+        // Paseo 0.16.1 returns full assistant snapshots. Leave a growing row
+        // unread until it is superseded or the turn is inactive.
+        if (growing) endSeq = Math.min(endSeq, growing.seqStart - 1);
       }
       return {
         epoch: response.epoch,
         firstSeq: response.window.minSeq,
         latestSeq: response.window.maxSeq,
+        endSeq,
         hasNewer: response.hasNewer,
-        reset: response.reset || response.staleCursor || response.gap,
-        entries: response.entries.map(({ item, turnId, seqEnd }) => {
-          const identity = { seq: seqEnd, turnId };
-          if (item.type === "user_message" || item.type === "assistant_message") return { ...identity, ...item };
-          if (item.type === "plugin" && item.pluginId === "task-inbox" && item.kind === batchOutcomeKind &&
-              item.version === batchOutcomeVersion) {
-            return { ...identity, type: "outcome", batchId: item.id };
+        reset,
+        entries: response.entries.flatMap(({ item, turnId, seqStart, seqEnd }): TimelineEntry[] => {
+          if (endSeq === null || seqStart > endSeq) return [];
+          if (item.type === "user_message" || item.type === "assistant_message" || item.type === "plugin") {
+            if (seqEnd > endSeq || (cursor && !reset && seqEnd <= cursor.seq)) return [];
+            const identity = { seq: seqEnd, turnId };
+            if (item.type === "user_message") return [{ ...identity, ...item }];
+            if (item.type === "assistant_message") return [{ ...identity, ...item, ...(projected ? { complete: true } : {}) }];
+            if (item.pluginId === "task-inbox" && item.kind === batchOutcomeKind && item.version === batchOutcomeVersion) {
+              return [{ ...identity, type: "outcome", batchId: item.id }];
+            }
           }
-          return { ...identity, type: "other" };
+          if (cursor && !reset && seqStart <= cursor.seq) return [];
+          return [{ seq: seqStart, turnId, type: "other" }];
         }),
       };
     },

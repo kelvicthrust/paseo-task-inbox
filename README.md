@@ -35,7 +35,7 @@ In **Task Inbox → Screenshot uploads**, save the HTTPS origin printed by Tails
 3. Select an existing chat and click **Start work**. The selected items and their images form one batch. Later additions stay in the inbox. Each batch accepts up to 20 items and 24 MiB of images, with up to four images of 8 MiB each per item.
 4. Follow progress in the workspace and selected chat. A final message in the bound chat shows the outcome without starting another agent turn. Completed items retain their check results and ready PR. Blocked items retain their reason.
 
-The plugin waits for an occupied chat and checks again immediately before sending. Paseo 0.16.1 leaves a small race if another message starts a turn between the check and the send. A persistent message ID lets Paseo recognize the original dispatch after a reconnect.
+The plugin waits for an occupied chat and checks again immediately before sending. Paseo 0.16.1 leaves a small race if another message starts a turn between the check and the send. A persistent message ID lets Paseo recognize the original dispatch after a reconnect. A full daemon restart can restore provider history without its original message or turn IDs. When the plugin cannot match an acknowledged batch to its turn, it shows a blocker for that batch and preserves the original receipt.
 
 ## How completion is verified
 

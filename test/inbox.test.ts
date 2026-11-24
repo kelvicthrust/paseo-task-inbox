@@ -53,13 +53,14 @@ async function fixture(t: TestContext) {
     repository: async () => "example/project",
     timeline: async (_agentId, cursor) => {
       if (cursor && cursor.epoch !== state.epoch) {
-        return { epoch: state.epoch, reset: true, firstSeq: 1, latestSeq: state.entries.length, entries: [], hasNewer: false };
+        return { epoch: state.epoch, reset: true, firstSeq: 1, latestSeq: state.entries.length, endSeq: null, entries: [], hasNewer: false };
       }
       return {
         epoch: state.epoch,
         reset: false,
         firstSeq: 1,
         latestSeq: state.entries.length,
+        endSeq: cursor ? Math.min(state.entries.length, cursor.seq + 2) : state.entries.length,
         entries: cursor ? state.entries.slice(cursor.seq, cursor.seq + 2) : [],
         hasNewer: cursor ? state.entries.length > cursor.seq + 2 : false,
       };
@@ -303,4 +304,45 @@ test("a ready PR alone cannot archive a bug without a passing per-item check", a
   assert.deepEqual(await f.inbox.badge(workspace.id), { count: 1, status: "completed" });
   await f.inbox.add(workspace.id, "Another capture");
   assert.deepEqual(await f.inbox.badge(workspace.id), { count: 1, status: "inbox" });
+});
+
+test("a queued batch resumes its same dormant chat through history before dispatch", async (t) => {
+  const f = await fixture(t);
+  f.state.agent = { ...agent, status: "closed", resumable: true };
+  await f.inbox.add(workspace.id, "Fix after daemon restart");
+  const item = (await f.inbox.view(workspace.id)).items[0];
+  assert.deepEqual((await f.inbox.view(workspace.id)).agents.map(({ id }) => id), [agent.id]);
+  await f.inbox.start(workspace.id, agent.id, [item.id]);
+  const readTimeline = f.host.timeline;
+  f.host.timeline = async (id, cursor) => {
+    assert.equal(id, agent.id);
+    f.state.agent = agent;
+    return readTimeline(id, cursor);
+  };
+  await f.restart();
+  await f.inbox.tick();
+  assert.equal(f.state.sent.length, 1);
+  assert.match(f.state.sent[0].text, /Fix after daemon restart/);
+});
+
+test("a daemon-reset history lacking stable prompt and turn IDs cannot complete or resend work", async (t) => {
+  const f = await fixture(t);
+  await f.inbox.add(workspace.id, "Fix header");
+  const item = (await f.inbox.view(workspace.id)).items[0];
+  await f.inbox.start(workspace.id, agent.id, [item.id]);
+  const batchId = (await f.inbox.view(workspace.id)).batch!.id;
+  await f.inbox.tick();
+  f.state.epoch = "daemon-restart";
+  f.state.clock += 60_001;
+  f.state.entries = [
+    { seq: 1, type: "user_message", text: f.state.sent[0].text },
+    { seq: 2, type: "assistant_message", text: report(batchId, item.id, { status: "completed", detail: "Uncorrelated history.", url: prUrl, revision }) },
+  ];
+  await f.restart();
+  await f.inbox.tick();
+  assert.equal(f.state.sent.length, 1);
+  assert.equal(f.state.verification.length, 0);
+  const itemAfterRestart = (await f.inbox.view(workspace.id)).items[0];
+  assert.equal(itemAfterRestart.status, "blocked");
+  assert.match(itemAfterRestart.detail, /history changed.*matching turn/i);
 });
