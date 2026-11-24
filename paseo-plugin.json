@@ -1,0 +1,8 @@
+{
+  "id": "task-inbox",
+  "name": "Task Inbox",
+  "description": "Collect workspace bugs and screenshots and send them to an existing chat.",
+  "requirements": {
+    "paseo": ">=0.16.1"
+  }
+}
