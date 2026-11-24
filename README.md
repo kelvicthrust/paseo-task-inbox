@@ -1,5 +1,7 @@
 # Paseo Task Inbox
 
+[![npm version](https://img.shields.io/npm/v/@kelvicthrust/paseo-task-inbox?logo=npm)](https://www.npmjs.com/package/@kelvicthrust/paseo-task-inbox)
+
 Capture bugs and screenshots while you test, then send the ones you want fixed to an existing Codex or Claude Code chat in Paseo. Each workspace has its own inbox, so you can keep testing while the agent works through the current batch. Verified fixes appear with the check result and a link to the pull request.
 
 ![Task Inbox workspace panel in Paseo showing three sample bugs and the Start work button](assets/task-inbox.png)
@@ -12,6 +14,16 @@ Use Paseo 0.16.1 or later on the machine that runs your agents. The daemon's Nod
 
 In Paseo, select that host and turn on **Enable plugins** under **Settings → Plugins**. Paseo plugins are trusted code and run with the daemon user's file and process access. [Paseo plugin setup](https://paseo.sh/docs/plugins)
 
+### Install from npm
+
+With npm available on the daemon host, install the latest release.
+
+```sh
+paseo plugin install npm:@kelvicthrust/paseo-task-inbox
+```
+
+Append a version such as `@0.1.0` to install a specific release.
+
 ### Install from source
 
 On the daemon host, with Node.js 26 and npm available:
@@ -21,19 +33,11 @@ git clone https://github.com/kelvicthrust/paseo-task-inbox.git
 cd paseo-task-inbox
 npm ci --ignore-scripts --include=dev
 paseo plugin install "$PWD"
-paseo plugin ls task-inbox
 ```
 
-If your daemon uses a custom home, pass `--home /path/to/paseo-home` to both Paseo commands. When the plugin shows **running**, open **Task Inbox** in the sidebar or choose **Open Task Inbox** in the workspace Command Center.
+### Open Task Inbox
 
-### Install from npm after publication
-
-Run these commands on the daemon host once the public package is available. Use the version you intend to install.
-
-```sh
-paseo plugin install npm:@kelvicthrust/paseo-task-inbox@0.1.0
-paseo plugin ls task-inbox
-```
+Run `paseo plugin ls task-inbox` to verify the plugin is **running**. If your daemon uses a custom home, pass `--home /path/to/paseo-home` to the install and status commands. Open **Task Inbox** in the sidebar or choose **Open Task Inbox** in the workspace Command Center.
 
 ## Capture and send bugs
 
@@ -76,7 +80,7 @@ npm run pack:release
 npm run test:package
 ```
 
-See the [maintainer release guide](https://github.com/kelvicthrust/paseo-task-inbox/blob/main/docs/releasing.md) for verifying the archive, publishing to npm, and preparing a Paseo catalog submission.
+See the [maintainer release guide](https://github.com/kelvicthrust/paseo-task-inbox/blob/main/docs/releasing.md) for GitHub Actions releases, npm archive verification, and Paseo catalog submission.
 
 ## License
 
