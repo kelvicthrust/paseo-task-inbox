@@ -1,5 +1,5 @@
 import { useRpc, type PluginSurfaceProps } from '@getpaseo/plugin/client';
-import { ExternalLink, Icon, Modal, SettingsCard, SettingsSelect, TextInput } from '@getpaseo/plugin/client/ui';
+import { ExternalLink, Icon, Modal, TextInput } from '@getpaseo/plugin/client/ui';
 import { useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import {
@@ -16,15 +16,14 @@ import { Action, Copy, VerifiedPr, statusLabel, type Colors } from './controls.t
 import { errorMessage, useInboxQuery } from './query.ts';
 
 export function WorkspaceInbox({
-  host, layout, theme, navigation, workspaceId,
-}: PluginSurfaceProps & { workspaceId: string }) {
+  host, layout, theme, navigation, workspaceId, activeAgentId,
+}: PluginSurfaceProps & { workspaceId: string; activeAgentId?: string | null }) {
   const read = useRpc(readInbox);
   const add = useRpc(addInboxItem);
   const start = useRpc(startInboxBatch);
   const issue = useRpc(issueUploadLink);
   const { data, error, refresh } = useInboxQuery(() => read({ workspaceId }), 3_000);
   const [draft, setDraft] = useState('');
-  const [chosenAgent, setChosenAgent] = useState<string>();
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState<'add' | 'start' | 'attach'>();
   const [message, setMessage] = useState<string>();
@@ -64,8 +63,7 @@ export function WorkspaceInbox({
   const checked = inbox.filter(({ id }) => !excluded.has(id));
   const checkedIds = checked.map(({ id }) => id);
   const batch = data.batch?.status === 'completed' ? null : data.batch;
-  const selected = chosenAgent ?? data.agentId ?? '';
-  const agent = data.agents.find(({ id }) => id === selected);
+  const agent = data.agents.find(({ id }) => id === activeAgentId);
   const batchAgent = data.agents.find(({ id }) => id === batch?.agentId);
   const disabled = Boolean(busy || error);
   const submitAllowed = !disabled && data.canStart && Boolean(agent) &&
@@ -89,6 +87,9 @@ export function WorkspaceInbox({
 
   return (
     <>
+      {activeAgentId === undefined && (
+        <Copy colors={colors} muted>Update the Paseo app to start work from the active chat.</Copy>
+      )}
       <View style={{ gap: 10 }}>
         <Copy colors={colors} heading size={17}>Capture a bug</Copy>
         <TextInput
@@ -129,7 +130,7 @@ export function WorkspaceInbox({
       {batch && (
         <View style={{ borderColor: colors.border, backgroundColor: colors.surface1, borderWidth: 1, borderRadius: 10, padding: 14, gap: 8 }}>
           <Copy colors={colors} heading size={17}>{statusLabel[batch.status]}</Copy>
-          {batchAgent && <Copy colors={colors} muted>{batchAgent.label}</Copy>}
+          <Copy colors={colors} muted>{batchAgent?.label ?? 'The batch’s chat is unavailable.'}</Copy>
           {batch.detail && <Copy colors={colors}>{batch.detail}</Copy>}
           {navigation && batchAgent && (
             <Action
@@ -158,21 +159,10 @@ export function WorkspaceInbox({
         ))}
         {inbox.length > 0 && (
           <>
-            {data.agents.length > 0 ? (
-              <SettingsCard>
-                <SettingsSelect
-                  label="Send to existing chat"
-                  value={agent?.id ?? ''}
-                  onValueChange={setChosenAgent}
-                  disabled={disabled || !data.canStart}
-                  options={[
-                    { value: '', label: 'Choose a chat' },
-                    ...data.agents.map(({ id, label, provider }) => ({ value: id, label: `${label} · ${provider}` })),
-                  ]}
-                />
-              </SettingsCard>
-            ) : (
-              <Copy colors={colors} muted>Open a chat in this workspace before starting work.</Copy>
+            {activeAgentId !== undefined && (
+              <Copy colors={colors} muted>
+                {agent ? `Send to ${agent.label}` : 'Select an available chat tab in this workspace to start work.'}
+              </Copy>
             )}
             {checkedIds.length > maxBatchItems && (
               <Copy colors={colors} error>Select up to {maxBatchItems} bugs for one batch.</Copy>
@@ -262,7 +252,7 @@ function Item({
             {showStatus && <Text style={{ color: tone, fontSize: 13 }}>{statusLabel[item.status]}</Text>}
           </View>
           <Copy colors={colors}>{item.text}</Copy>
-          {item.detail && item.detail !== batchDetail && <Copy colors={colors} muted>{item.detail}</Copy>}
+          {item.detail !== '' && item.detail !== batchDetail && <Copy colors={colors} muted>{item.detail}</Copy>}
           {item.images > 0 && (
             <Copy colors={colors} muted>{item.images} {item.images === 1 ? 'screenshot' : 'screenshots'}</Copy>
           )}
