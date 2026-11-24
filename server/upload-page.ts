@@ -12,6 +12,7 @@ export function uploadPage(nonce: string): string {
   main { max-width: 420px; margin: auto; }
   h1 { font-size: 1.55rem; line-height: 1.25; }
   form { display: grid; gap: 12px; }
+  form[hidden] { display: none; }
   input, button { font: inherit; max-width: 100%; }
   button { min-height: 44px; padding: 6px 16px; width: fit-content; }
   input::file-selector-button { min-height: 44px; font: inherit; }
@@ -32,19 +33,28 @@ export function uploadPage(nonce: string): string {
   const input = document.querySelector('input');
   const button = document.querySelector('button');
   const status = document.querySelector('[role=status]');
-  const grant = location.hash.slice(1);
+  let activeGrant = null;
 
-  if (/^[A-Za-z0-9_-]{43}$/.test(grant)) {
-    history.replaceState(null, '', location.pathname);
-    input.disabled = false;
-    button.disabled = false;
-  } else {
-    status.textContent = 'Open a fresh screenshot link from Task Inbox.';
+  function openGrant() {
+    const token = location.hash.slice(1);
+    if (location.hash) history.replaceState(null, '', location.pathname);
+    activeGrant = /^[A-Za-z0-9_-]{43}$/.test(token) ? { token } : null;
+    input.value = '';
+    form.hidden = false;
+    input.disabled = !activeGrant;
+    button.disabled = !activeGrant;
+    status.textContent = activeGrant ? '' : 'Open a fresh screenshot link from Task Inbox.';
   }
+
+  window.addEventListener('hashchange', (event) => {
+    if (event.newURL === location.href) openGrant();
+  });
+  openGrant();
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (button.disabled) return;
+    const grant = activeGrant;
+    if (!grant || button.disabled) return;
     const file = input.files[0];
     if (!file || !['image/png', 'image/jpeg'].includes(file.type) || file.size > ${screenshotLimit}) {
       status.textContent = 'Choose a PNG or JPEG up to ${screenshotLimit / 1024 / 1024} MB.';
@@ -59,21 +69,20 @@ export function uploadPage(nonce: string): string {
         method: 'POST',
         credentials: 'omit',
         redirect: 'error',
-        headers: { Authorization: 'Bearer ' + grant, 'Content-Type': file.type },
+        headers: { Authorization: 'Bearer ' + grant.token, 'Content-Type': file.type },
         body: file,
       });
-      if (response.ok) {
-        retryable = false;
-        form.hidden = true;
-        status.textContent = 'Screenshot attached. Return to Task Inbox.';
-      } else {
-        retryable = [400, 413, 415].includes(response.status);
-        status.textContent = await response.text();
-      }
+      const message = response.ok ? 'Screenshot attached. Return to Task Inbox.' : await response.text();
+      if (activeGrant !== grant) return;
+      retryable = [400, 413, 415].includes(response.status);
+      form.hidden = response.ok;
+      status.textContent = message;
     } catch {
-      status.textContent = 'Connection interrupted. Check Task Inbox before requesting a fresh link.';
+      if (activeGrant === grant) {
+        status.textContent = 'Connection interrupted. Check Task Inbox before requesting a fresh link.';
+      }
     } finally {
-      if (retryable) {
+      if (activeGrant === grant && retryable) {
         input.disabled = false;
         button.disabled = false;
       }
