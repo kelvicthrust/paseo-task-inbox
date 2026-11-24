@@ -1,7 +1,9 @@
 {
   "id": "task-inbox",
   "name": "Task Inbox",
-  "description": "Collect workspace bugs and screenshots and send them to an existing chat.",
+  "description": "Collect bugs and screenshots in Paseo, send a batch to an existing chat, and track verified fixes.",
+  "icon": "assets/icon.png",
+  "media": ["assets/task-inbox.png"],
   "requirements": {
     "paseo": ">=0.16.1"
   }

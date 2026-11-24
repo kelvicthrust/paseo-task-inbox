@@ -1,72 +1,83 @@
 # Paseo Task Inbox
 
-Collect bugs and screenshots while testing, then send a batch to an existing Codex or Claude chat. Each Paseo workspace keeps its own inbox. A verified fix moves to **Completed** with its pull request and evidence.
+Capture bugs and screenshots while you test, then send the ones you want fixed to an existing Codex or Claude Code chat in Paseo. Each workspace has its own inbox, so you can keep testing while the agent works through the current batch. Verified fixes appear with the check result and a link to the pull request.
 
-## Install on a pilot host
+![Task Inbox workspace panel in Paseo showing three sample bugs and the Start work button](assets/task-inbox.png)
 
-Use Paseo 0.16.1 or later with a daemon runtime that supports `node:sqlite`. The host needs Git and a GitHub CLI session with read access to the workspace's PRs. The agent in the selected chat needs its usual permission to publish fixes.
+_Task Inbox with sample data._
 
-Check that trusted plugins are enabled for this daemon with `paseo daemon config get pluginsEnabled`. The daemon owner must explicitly opt in when the switch is off. Trusted plugins run with the host user’s file and process access.
+## Get started
 
-Once a version has been released to npm, install that exact version on the daemon machine with `paseo plugin install npm:@kelvicthrust/paseo-task-inbox@<version>` (replace `<version>` with the release number). Run `paseo plugin ls task-inbox` to verify it is running.
+Use Paseo 0.16.1 or later on the machine that runs your agents. The daemon's Node.js runtime must support `node:sqlite`. To send a batch and verify fixes, use a workspace with a GitHub `origin`, Git and an authenticated GitHub CLI (`gh`) on the daemon host, and an existing chat that can publish a fix PR.
 
-For a source install, check out the reviewed revision on the daemon machine. From that checkout, install the locked build dependencies and use the Paseo CLI that belongs to the daemon. Use `--home` with the pilot daemon's directory when it differs from the default.
+In Paseo, select that host and turn on **Enable plugins** under **Settings → Plugins**. Paseo plugins are trusted code and run with the daemon user's file and process access. [Paseo plugin setup](https://paseo.sh/docs/plugins)
+
+### Install from source
+
+On the daemon host, with Node.js 26 and npm available:
 
 ```sh
+git clone https://github.com/kelvicthrust/paseo-task-inbox.git
+cd paseo-task-inbox
 npm ci --ignore-scripts --include=dev
 paseo plugin install "$PWD"
 paseo plugin ls task-inbox
 ```
 
-Paseo loads the installed plugin when its daemon starts. The plugin stores the inbox and screenshots in `$PASEO_HOME/plugin-data/task-inbox/inbox.sqlite3`. The default home is `~/.paseo`. To resume unattended work on restart, the plugin reconnects to this same daemon through its verified loopback listener or user-owned Unix socket.
+If your daemon uses a custom home, pass `--home /path/to/paseo-home` to both Paseo commands. When the plugin shows **running**, open **Task Inbox** in the sidebar or choose **Open Task Inbox** in the workspace Command Center.
 
-### Enable screenshots from a phone or remote desktop
+### Install from npm after publication
 
-On the daemon machine, check `tailscale serve status` and reserve an unused private HTTPS port. The uploader itself listens on IPv4 loopback, port 47831. For example, when 47831 is free:
+Run these commands on the daemon host once the public package is available. Use the version you intend to install.
+
+```sh
+paseo plugin install npm:@kelvicthrust/paseo-task-inbox@0.1.0
+paseo plugin ls task-inbox
+```
+
+## Capture and send bugs
+
+1. Open the workspace inbox. Describe what went wrong and select **Add to inbox**. You can capture bugs without starting an agent turn.
+2. To include an image, select **Attach screenshot** on the bug and open the browser picker. Each link accepts one PNG or JPEG and expires after five minutes.
+3. Select the bugs you want fixed, choose an existing chat, and select **Start work**. A batch can hold up to 20 bugs and 24 MiB of images. Each bug can have up to four images of 8 MiB each.
+4. Follow the batch in Task Inbox or select **Open chat**. New bugs stay in the inbox for a later batch. When the current batch finishes, Task Inbox also posts an outcome in the selected chat.
+
+### Upload screenshots from another device
+
+A browser on the daemon host can use the built-in loopback uploader with the screenshot address left blank. For a phone, desktop app, or browser on another device, use private Tailscale Serve on the daemon host. Check `tailscale serve status` first and choose an unused HTTPS port. For example:
 
 ```sh
 tailscale serve --bg --https=47831 http://127.0.0.1:47831
 ```
 
-In **Task Inbox → Screenshot uploads**, save the HTTPS origin printed by Tailscale Serve, including the port. Open it from a device signed into your tailnet. The uploader requires an identified Tailscale user and accepts one PNG or JPEG per five-minute link. A web browser on the daemon machine can also use the loopback uploader with the setting empty.
+In **Task Inbox → Screenshot uploads**, save the HTTPS origin printed by Tailscale, including its port. Open the upload link from a device signed into your tailnet under a user account. [Tailscale Serve setup](https://tailscale.com/docs/features/tailscale-serve)
 
-## Use the inbox
+## Verified fixes and blocked batches
 
-1. Open **Task Inbox** in the Paseo sidebar and choose the workspace, or open it from that workspace's command center.
-2. Add bugs as you find them. Choose **Attach screenshot** on an item and follow its link to the browser picker. Capture uses no agent turns.
-3. Select an existing chat and click **Start work**. The selected items and their images form one batch. Later additions stay in the inbox. Each batch accepts up to 20 items and 24 MiB of images, with up to four images of 8 MiB each per item.
-4. Follow progress in the workspace and selected chat. A final message in the bound chat shows the outcome without starting another agent turn. Completed items retain their check results and ready PR. Blocked items retain their reason.
+**Completed** means the agent reported a passing test or manual check for that bug, and Task Inbox confirmed the matching fix evidence on GitHub. The plugin uses the host's `gh` session to check that the PR is open and ready for review in the workspace repository, that its head matches the reported revision, and that the commit named for the bug belongs to the PR. Merging and deploying each require separate authorization.
 
-The plugin waits for an occupied chat and checks again immediately before sending. Paseo 0.16.1 leaves a small race if another message starts a turn between the check and the send. A persistent message ID lets Paseo recognize the original dispatch after a reconnect. A full daemon restart can restore provider history without its original message or turn IDs. When the plugin cannot match an acknowledged batch to its turn, it shows a blocker for that batch and preserves the original receipt.
+Task Inbox queues a batch while the selected chat is busy. Paseo 0.16.1 has a brief window in which another message can start a turn just as the plugin sends. A reconnect reuses the original dispatch ID. If a daemon restart restores chat history without enough information to match the original turn, the batch stays **Blocked** with its receipt preserved. Bugs also stay visible when verification fails or the agent reports a blocker.
 
-## How completion is verified
+## Data and permissions
 
-The agent reports the test or manual step it performed and the passing result it observed for each bug. It records the item ID and fix commit in the PR body. The plugin reads the PR from GitHub, confirms the workspace repository, open review-ready status and reported head, and verifies that the commit listed for that item belongs to the PR. Merge and restart follow the workspace owner’s separate authorization.
+Task Inbox stores bug reports, attached images, and dispatch records in `$PASEO_HOME/plugin-data/task-inbox/inbox.sqlite3` on the daemon host. The default Paseo home is `~/.paseo`. When you start work, the selected bug descriptions and images go to the selected chat and its configured provider. Task Inbox reads that chat's projected activity and results to follow the batch, and reads the fix PR from GitHub to verify the outcome.
 
-## Development
+## Contribute
 
-Use Node 26 to install the locked development dependencies, type-check the plugin and run its tests. The upload tests open an ephemeral loopback listener.
+Bug reports and pull requests are welcome. Include the Paseo version, client, and steps to reproduce when reporting an issue. Use sample data for screenshots and logs. [GitHub Issues](https://github.com/kelvicthrust/paseo-task-inbox/issues)
+
+Use Node.js 26 to install the locked dependencies and run the plugin and package checks. The upload tests use a temporary loopback listener.
 
 ```sh
 npm ci --ignore-scripts
 npm run typecheck
 npm test
+npm run pack:release
+npm run test:package
 ```
 
-## Release to npm and GitHub
+See the [maintainer release guide](https://github.com/kelvicthrust/paseo-task-inbox/blob/main/docs/releasing.md) for verifying the archive, publishing to npm, and preparing a Paseo catalog submission.
 
-**Rehearse a build** from **Actions → Release → Run workflow**. Download the artifact for the selected revision, then run `shasum -a 256 -c SHA256SUMS` in the extracted directory. It contains the tested Paseo plugin tarball. Manual runs stop after uploading the build artifact.
+## License
 
-**Set up npm once.** When ready to distribute the first version, a maintainer of the `@kelvicthrust` scope stages the verified archive from an authenticated npm session. For version 0.1.0, run the following command in the extracted artifact directory.
-
-```sh
-npm stage publish ./kelvicthrust-paseo-task-inbox-0.1.0.tgz --access public --registry=https://registry.npmjs.org/
-```
-
-Approve the staged version on npm when it is ready for installation. From a fresh directory, download that exact version with `npm pack @kelvicthrust/paseo-task-inbox@0.1.0` and verify it against the original `SHA256SUMS`. Create the initial GitHub release with tag `v0.1.0` at the rehearsed commit and attach the verified tarball and checksum.
-
-When the next version bump is ready, open the npm package settings and add a GitHub Actions trusted publisher with owner **kelvicthrust**, repository **paseo-task-inbox**, workflow **release.yml**, and an empty environment. Enable **Allow npm publish** and **Allow npm dist-tag**. Merge the version bump within two days of adding the publisher so its first OIDC publish validates the connection. [Staging a new npm package](https://github.blog/changelog/2026-10-02-npm-staged-publishing-now-supports-creating-new-packages/) · [npm trusted publishers](https://docs.npmjs.com/trusted-publishers/)
-
-**Release subsequent versions** by running `npm version patch --no-git-tag-version` (or a minor or major bump), reviewing the package and lockfile changes, and merging the release PR into `main`. A higher stable version triggers the workflow. It tests and packs the plugin, publishes under `next`, compares the npm download with the tested archive, promotes it to `latest`, and creates the GitHub release and tag with the tarball and its checksum.
-
-If a job fails after npm accepts a version, rerun the failed jobs on the original workflow run to reuse its verified artifact. If npm already holds different bytes for that version, prepare a new version.
+Paseo Task Inbox is available under the [MIT License](LICENSE).

@@ -8,13 +8,17 @@ import { join, relative, resolve, sep } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
 const writeJson = (file, data) => writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
-const { name, version, description, repository, type, engines, dependencies } = readJson(
+const { name, version, description, license, repository, type, engines, dependencies } = readJson(
   join(root, 'package.json'),
 );
 const output = join(root, 'dist', 'release');
 const archive = join(output, `${name.slice(1).replace('/', '-')}-${version}.tgz`);
 const sourceFiles = [
+  'LICENSE',
+  'OVERVIEW.md',
   'README.md',
+  'assets/icon.png',
+  'assets/task-inbox.png',
   'paseo-plugin.json',
   'index.client.tsx',
   'index.server.ts',
@@ -38,6 +42,7 @@ function pack(scratch) {
     name,
     version,
     description,
+    license,
     repository,
     type,
     engines,
@@ -109,6 +114,7 @@ function test(scratch) {
   const manifest = readJson(join(plugin, 'package.json'));
   assert.equal(manifest.name, name);
   assert.equal(manifest.version, version);
+  assert.equal(manifest.license, 'MIT');
   assert.deepEqual(manifest.repository, {
     type: 'git',
     url: 'git+https://github.com/kelvicthrust/paseo-task-inbox.git',
@@ -117,7 +123,13 @@ function test(scratch) {
   assert.equal(manifest.private, undefined);
   assert.equal(manifest.devDependencies, undefined);
   assert.equal(manifest.scripts, undefined);
-  assert.equal(readJson(join(plugin, 'paseo-plugin.json')).id, 'task-inbox');
+  const pluginManifest = readJson(join(plugin, 'paseo-plugin.json'));
+  assert.equal(pluginManifest.id, 'task-inbox');
+  assert.equal(pluginManifest.icon, 'assets/icon.png');
+  assert.deepEqual(pluginManifest.media, ['assets/task-inbox.png']);
+  for (const file of ['LICENSE', 'OVERVIEW.md', pluginManifest.icon, ...pluginManifest.media]) {
+    assert.deepEqual(readFileSync(join(plugin, file)), readFileSync(join(root, file)), file);
+  }
   const shrinkwrap = readJson(join(plugin, 'npm-shrinkwrap.json'));
   const bundled = new Map(production);
   for (const [path, entry] of Object.entries(shrinkwrap.packages)) {
