@@ -1,6 +1,6 @@
 # Paseo Task Inbox
 
-[![npm version](https://img.shields.io/npm/v/@kelvicthrust/paseo-task-inbox?logo=npm)](https://www.npmjs.com/package/@kelvicthrust/paseo-task-inbox)
+[![npm version](https://badgen.net/npm/v/@kelvicthrust/paseo-task-inbox)](https://www.npmjs.com/package/@kelvicthrust/paseo-task-inbox)
 
 Capture bugs and screenshots while you test, then send the ones you want fixed to an existing Codex or Claude Code chat in Paseo. Each workspace has its own inbox, so you can keep testing while the agent works through the current batch. Verified fixes appear with the check result and a link to the pull request.
 
