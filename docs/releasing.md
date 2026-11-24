@@ -29,7 +29,7 @@ npm stage publish './kelvicthrust-paseo-task-inbox-<version>.tgz' --access publi
 
 Approve the staged publication on npm. Verify the public archive as shown below. Run **Release** again on the same commit with **Finalize an npm version published locally** on. Use `main` while it points to that commit. If `main` has moved, create and push the matching `v<version>` tag at the rehearsed commit and select that tag. The workflow verifies the public npm download and attaches the tested tarball and checksum to the GitHub release. [npm staged publishing](https://docs.npmjs.com/staged-publishing/)
 
-## Submit to the Paseo catalog
+## Verify the public npm release
 
 From a fresh directory, replace `<version>` with the exact npm version and compare the public download against the SHA-256 checksum from the release artifact.
 
@@ -38,18 +38,15 @@ npm pack '@kelvicthrust/paseo-task-inbox@<version>' --ignore-scripts --registry=
 shasum -a 256 -c /absolute/path/to/SHA256SUMS
 ```
 
-Install that version on the test daemon. Confirm it reports **running** and repeat the Explorer smoke test above on the stable Paseo build.
+Install that exact npm version on the isolated test daemon. Confirm it reports **running** and repeat the Explorer smoke test above on the stable Paseo build.
 
 ```sh
 paseo plugin install 'npm:@kelvicthrust/paseo-task-inbox@<version>'
 paseo plugin ls task-inbox
 ```
 
-Use these details in the official submission. [Paseo submission form](https://github.com/getpaseo/plugins/issues/new?template=submit-plugin.yml)
+## Update the Paseo catalog listing
 
-- **Title** — Task Inbox
-- **Source** — `npm:@kelvicthrust/paseo-task-inbox@<version>`
-- **Categories** — Workspaces and Sidebar
-- **Interface image** — `https://raw.githubusercontent.com/kelvicthrust/paseo-task-inbox/<release-commit>/assets/task-inbox.png`, using the full commit SHA for the verified release
+Install the approved version with `paseo plugin add kelvicthrust/task-inbox`. New npm releases receive automatic catalog update PRs. Check that the review PR pins the intended npm version and includes the current overview and screenshot. The catalog keeps serving the approved version while the update is under review. [Task Inbox listing](https://paseo.sh/plugins/kelvicthrust/task-inbox)
 
-After approval, add the official listing URL to the README. [Paseo publishing guide](https://paseo.sh/docs/plugins/publishing)
+If the reviewer requests an updated screenshot, link the sample-data PNG at the verified release commit in the review PR. After approval, install from the catalog on an isolated test daemon and confirm the listed version matches the approved release. [Paseo publishing guide](https://paseo.sh/docs/plugins/publishing#plugin-registry)

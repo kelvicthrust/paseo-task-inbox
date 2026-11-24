@@ -14,12 +14,22 @@ For dispatch and verification, use a workspace with a GitHub `origin`, Codex or 
 
 In Paseo, select that host and turn on **Enable plugins** under **Settings → Plugins**. Paseo plugins are trusted code and run with the daemon user's file and process access. [Paseo plugin setup](https://paseo.sh/docs/plugins)
 
-### Install from npm
+### Install from the Paseo catalog
 
-With npm available on the daemon host, install the plugin.
+Install the catalog-approved version with npm available on the daemon host. [Task Inbox in the Paseo catalog](https://paseo.sh/plugins/kelvicthrust/task-inbox)
 
 ```sh
-paseo plugin install npm:@kelvicthrust/paseo-task-inbox
+paseo plugin add kelvicthrust/task-inbox
+```
+
+In the app, enter `kelvicthrust/task-inbox` as the source under **Settings → Plugins**.
+
+### Install a specific npm version
+
+Use a versioned npm source to test a particular release directly.
+
+```sh
+paseo plugin install 'npm:@kelvicthrust/paseo-task-inbox@0.2.0'
 ```
 
 ### Install from source
@@ -84,7 +94,7 @@ npm run pack:release
 npm run test:package
 ```
 
-See the [maintainer release guide](https://github.com/kelvicthrust/paseo-task-inbox/blob/main/docs/releasing.md) for GitHub Actions releases, npm archive verification, and Paseo catalog submission.
+See the [maintainer release guide](https://github.com/kelvicthrust/paseo-task-inbox/blob/main/docs/releasing.md) for GitHub Actions releases, npm archive verification, and Paseo catalog updates.
 
 ## License
 
