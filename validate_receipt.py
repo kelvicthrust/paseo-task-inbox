@@ -23,6 +23,16 @@ def check_identity(records):
         providers.add(provider)
 
 
+def check_observations(records):
+    required = ("sameTurnCodeMatchedPrivateOracle", "codeAbsentFromPrompt", "idleAfter")
+    for record in records:
+        if any(record.get(key) is not True for key in required):
+            raise ValueError(f"{record['provider']} image observation is incomplete or invalid.")
+        message_count = record.get("matchingUserMessages")
+        if type(message_count) is not int or message_count != 1:
+            raise ValueError(f"{record['provider']} must have exactly one matching user message.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("receipt", type=Path)
@@ -30,9 +40,10 @@ def main():
     try:
         records = json.loads(args.receipt.read_text())
         check_identity(records)
+        check_observations(records)
     except (OSError, ValueError) as error:
         raise SystemExit(str(error)) from None
-    print("Native pilot provider identities verified.")
+    print("Native pilot provider identities and image observations verified.")
 
 
 if __name__ == "__main__":
