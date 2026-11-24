@@ -12,6 +12,8 @@ _Task Inbox with sample data._
 
 Use Paseo 0.16.1 or later on the machine that runs your agents. The daemon's Node.js runtime must support `node:sqlite`. To send a batch and verify fixes, use a workspace with a GitHub `origin`, Git and an authenticated GitHub CLI (`gh`) on the daemon host, and an existing chat that can publish a fix PR.
 
+Starting work from Explorer requires a Paseo app that shares the active chat with workspace panels. If Task Inbox prompts you to update Paseo, you can still capture bugs and attach screenshots.
+
 In Paseo, select that host and turn on **Enable plugins** under **Settings → Plugins**. Paseo plugins are trusted code and run with the daemon user's file and process access. [Paseo plugin setup](https://paseo.sh/docs/plugins)
 
 ### Install from npm
@@ -37,14 +39,14 @@ paseo plugin install "$PWD"
 
 ### Open Task Inbox
 
-Run `paseo plugin ls task-inbox` to verify the plugin is **running**. If your daemon uses a custom home, pass `--home /path/to/paseo-home` to the install and status commands. Open **Task Inbox** in the sidebar or choose **Open Task Inbox** in the workspace Command Center.
+Run `paseo plugin ls task-inbox` to verify the plugin is **running**. If your daemon uses a custom home, pass `--home /path/to/paseo-home` to the install and status commands. In your workspace's right-side Explorer, open **+ → Task Inbox**. You can also choose **Open Task Inbox** in the workspace Command Center.
 
 ## Capture and send bugs
 
 1. Open the workspace inbox. Describe what went wrong and select **Add to inbox**. You can capture bugs without starting an agent turn.
 2. To include an image, select **Attach screenshot** on the bug and open the browser picker. Each link accepts one PNG or JPEG and expires after five minutes.
-3. Select the bugs you want fixed, choose an existing chat, and select **Start work**. A batch can hold up to 20 bugs and 24 MiB of images. Each bug can have up to four images of 8 MiB each.
-4. Follow the batch in Task Inbox or select **Open chat**. New bugs stay in the inbox for a later batch. When the current batch finishes, Task Inbox also posts an outcome in the selected chat.
+3. Open the chat you want to use, select the bugs to fix, then choose **Start work**. The inbox is shared by all chats in the workspace. A batch can hold up to 20 bugs and 24 MiB of images. Each bug can have up to four images of 8 MiB each.
+4. Follow the batch in Task Inbox or select **Open chat**. Switching tabs changes the destination for the next batch. The current batch and its outcome stay with the original chat.
 
 ### Upload screenshots from another device
 

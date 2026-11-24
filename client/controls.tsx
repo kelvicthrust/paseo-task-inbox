@@ -15,14 +15,13 @@ export const statusLabel = {
 
 export function Page({
   children,
-  layout,
   theme,
-}: Pick<PluginSurfaceProps, 'layout' | 'theme'> & { children: ReactNode }) {
+}: Pick<PluginSurfaceProps, 'theme'> & { children: ReactNode }) {
   return (
     <ScrollView
       keyboardShouldPersistTaps="handled"
       style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
-      contentContainerStyle={{ padding: layout.compact ? 16 : 28, alignItems: 'center' }}
+      contentContainerStyle={{ padding: 12, alignItems: 'center' }}
     >
       <View style={{ width: '100%', maxWidth: 696, gap: 20 }}>{children}</View>
     </ScrollView>
@@ -80,6 +79,7 @@ export function Action({
         borderWidth: 1,
         borderRadius: 8,
         minHeight: 44,
+        maxWidth: '100%',
         alignSelf: 'flex-start',
         flexDirection: 'row',
         alignItems: 'center',
@@ -89,7 +89,7 @@ export function Action({
       })}
     >
       {icon && <Icon name={icon} size={16} color={foreground} />}
-      <Text style={{ color: foreground, fontWeight: '600', fontSize: 14 }}>{label}</Text>
+      <Text style={{ color: foreground, fontWeight: '600', fontSize: 14, flexShrink: 1 }}>{label}</Text>
     </Pressable>
   );
 }

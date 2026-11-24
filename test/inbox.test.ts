@@ -160,6 +160,43 @@ test("a lost acknowledgement reconciles from the existing chat without duplicate
   assert.match(view.items[0].detail, new RegExp(revision));
 });
 
+test("the workspace inbox can target either chat and a started batch stays with its original chat", async (t) => {
+  const f = await fixture(t);
+  const otherChat = { ...agent, id: "agent-2", label: "Second chat" };
+  const foreignChat = { ...agent, id: "agent-3", workspaceId: anotherWorkspace.id };
+  const send = f.host.send;
+  const sentTo: string[] = [];
+  f.host.agents = async (id) => id === workspace.id ? [f.state.agent, otherChat] : [foreignChat];
+  f.host.agent = async (id) => [f.state.agent, otherChat, foreignChat].find((chat) => chat.id === id) ?? null;
+  f.host.send = async (id, message) => {
+    sentTo.push(id);
+    await send(id, message);
+  };
+  await f.inbox.add(workspace.id, "Fix original bug");
+  await f.inbox.add(anotherWorkspace.id, "Private capture");
+  const { items: [item], agents } = await f.inbox.view(workspace.id);
+  assert.deepEqual(agents.map(({ id }) => id), [agent.id, otherChat.id]);
+  await assert.rejects(f.inbox.start(workspace.id, foreignChat.id, [item.id]), /existing chat from this workspace/);
+  await f.inbox.start(workspace.id, agent.id, [item.id]);
+  const { batch } = await f.inbox.view(workspace.id);
+  await f.inbox.add(workspace.id, "Fix later bug");
+  const later = (await f.inbox.view(workspace.id)).items[1];
+  await assert.rejects(f.inbox.start(workspace.id, otherChat.id, [later.id]), /active batch/);
+  await f.restart();
+  await f.inbox.tick();
+  assert.deepEqual(sentTo, [agent.id]);
+  f.addAssistant(report(batch!.id, item.id, { status: "blocked", detail: "Reproduction needs staging." }));
+  await f.inbox.tick();
+  const result = await f.inbox.view(workspace.id);
+  assert.equal(result.batch?.agentId, agent.id);
+  assert.equal(result.items[0].status, "blocked");
+  assert.equal(f.state.annotations[0]?.batchId, batch?.id);
+  assert.deepEqual(result.items.map(({ text }) => text), ["Fix original bug", "Fix later bug"]);
+  await f.inbox.start(workspace.id, otherChat.id, [later.id]);
+  await f.inbox.tick();
+  assert.deepEqual(sentTo, [agent.id, otherChat.id]);
+});
+
 test("only matching, strict, streamed assistant reports become progress, blockers or verified completion", async (t) => {
   const f = await fixture(t);
   await f.inbox.add(workspace.id, "First");
