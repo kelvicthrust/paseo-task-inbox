@@ -8,10 +8,11 @@ Use Paseo 0.16.1 or later with a daemon runtime that supports `node:sqlite`. The
 
 Check that trusted plugins are enabled for this daemon with `paseo daemon config get pluginsEnabled`. The daemon owner must explicitly opt in when the switch is off. Trusted plugins run with the host user’s file and process access.
 
-Check out the reviewed revision on the daemon machine, then run these commands with the Paseo CLI that belongs to that daemon. Use `--home` with the pilot daemon's directory when it differs from the default.
+Check out the reviewed revision on the daemon machine. From that checkout, install the locked build dependencies and use the Paseo CLI that belongs to the daemon. Use `--home` with the pilot daemon's directory when it differs from the default.
 
 ```sh
-paseo plugin install /absolute/path/to/paseo-task-inbox
+npm ci --ignore-scripts --include=dev
+paseo plugin install "$PWD"
 paseo plugin ls task-inbox
 ```
 
