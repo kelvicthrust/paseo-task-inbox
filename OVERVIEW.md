@@ -1,10 +1,10 @@
 # Task Inbox
 
-Collect bugs and screenshots in a Paseo workspace while you test. When you are ready, select the bugs to fix and send them as one batch to an existing chat. You can keep capturing bugs while the chat works through the batch.
+Collect bugs and screenshots in a Paseo workspace while you test. Select the bugs you want fixed and start a batch. Task Inbox opens a chat for that batch, and you can keep capturing bugs while the agent works.
 
-Open **+ → Task Inbox** in the workspace's right-side Explorer or choose **Open Task Inbox** in the workspace Command Center. All chats in the workspace share the inbox. Add a description and use **Attach screenshot** for a PNG or JPEG. Select a chat tab in the main workspace pane, check the **Send to** label, and choose **Start work** for the selected bugs. You can keep capturing bugs when the main pane shows a terminal or when your app needs an update to start work.
+Open **+ → Task Inbox** in the workspace's right-side Explorer or choose **Open Task Inbox** in the workspace Command Center. All tabs in the workspace share the inbox. Add a description and use **Attach screenshot** for a PNG or JPEG. Select the bugs to send, check the configured model, and choose **Start work**. Select **Open chat** to follow the batch in its chat.
 
-Starting work from Explorer requires a Paseo app that provides the active chat to workspace panels. The daemon's Node.js runtime must support SQLite. Dispatch and verification also need a workspace with a GitHub origin, Git and authenticated GitHub CLI on the host, and an existing chat that can publish a fix PR. The screenshot picker uses a local browser on the daemon host or a private Tailscale Serve address for remote uploads. Upload links accept one image and expire after five minutes.
+Use Paseo Desktop 0.17.4 or later and a daemon whose Node.js runtime supports SQLite. Choose an available Codex or Claude Code model in **Task Inbox agent** settings. Dispatch and verification need a workspace with a GitHub origin, Git, and an authenticated GitHub CLI on the host. The screenshot picker uses a local browser on the daemon host or a private Tailscale Serve address for remote uploads. Upload links accept one image and expire after five minutes.
 
 Each workspace can have one active batch. A busy chat queues the batch, and the batch and its result stay with the original chat when you switch tabs or reconnect. The plugin marks a bug complete after the agent reports a passing check and GitHub confirms the matching fix evidence on an open, ready PR in the workspace repository. Blocked bugs keep their status and explanation. Merging and deploying require separate authorization.
 

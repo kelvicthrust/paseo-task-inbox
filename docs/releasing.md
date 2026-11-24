@@ -2,14 +2,13 @@
 
 **Plugin checks** runs on pull requests. **Release** uses Node.js 26.3.1 and npm 11.21.3 to test and pack an archive on Ubuntu. A manual run with **Finalize an npm version published locally** off builds a candidate for the selected commit and uploads the verified archive and its SHA-256 checksum. [Release workflow](https://github.com/kelvicthrust/paseo-task-inbox/actions/workflows/release.yml)
 
-## Prepare the first Explorer release
+## Verify the Explorer workflow
 
-Wait for a stable Paseo app release that provides active chat context to workspace panels. Install the candidate archive on an isolated daemon and test it with that stable app. [Upstream Paseo change](https://github.com/getpaseo/paseo/pull/10681)
+Install the candidate archive on an isolated daemon and use stock Paseo Desktop at the minimum version declared in `paseo-plugin.json`.
 
 1. Confirm the plugin reports **running**. Open **+ → Task Inbox** in the right-side Explorer and save a sample bug. Open the workspace Command Center and confirm **Open Task Inbox** focuses the existing Explorer tab.
-2. Open two chats and a terminal in the same workspace. Confirm the inbox is shared, **Send to** follows the active chat, and **Start work** is disabled with the terminal selected. Start a batch in the first chat, switch chats, and reload. Use **Open chat** to confirm the batch still points to the first chat.
-3. Set the verified minimum in `paseo-plugin.json` and the docs. Update the plugin SDK dependency and lockfile to the verified SDK version that declares `activeAgentId`. Replace the README preview instructions with the Explorer release instructions and use an absolute GitHub URL for this guide so the link works from npm.
-4. Capture the stable Explorer interface with sample data and replace `assets/task-inbox.png`. Check the image for private information. Use the packaged image in the README and confirm the archive includes the manifest media and `OVERVIEW.md`.
+2. Set an available model in **Task Inbox agent**. From a workspace with a terminal selected, attach a sample screenshot and start the batch. Confirm the plugin creates one chat in the workspace, **Open chat** goes to that chat, and reloading preserves it.
+3. If the interface changed, replace `assets/task-inbox.png` with a screenshot from the stable app using sample data. Check the image for private information. Confirm the archive includes the manifest media and `OVERVIEW.md`.
 
 ## Publish with GitHub Actions
 

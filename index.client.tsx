@@ -10,7 +10,7 @@ import { Copy, Page, statusLabel } from './client/controls.tsx';
 import { WorkspaceInbox } from './client/inbox.tsx';
 import { BatchOutcome } from './client/outcome.tsx';
 import { useInboxQuery } from './client/query.ts';
-import { ScreenshotSettings } from './client/settings.tsx';
+import { AgentSettings, ScreenshotSettings } from './client/settings.tsx';
 import { readInboxBadge } from './shared/rpc.ts';
 import { batchOutcomeKind, batchOutcomeSchema, batchOutcomeVersion } from './shared/outcome.ts';
 
@@ -18,7 +18,7 @@ const id = 'inbox';
 const title = 'Task Inbox';
 const icon = 'Inbox';
 
-function InboxPanel(props: PluginWorkspacePanelProps & { activeAgentId?: string | null }) {
+function InboxPanel(props: PluginWorkspacePanelProps) {
   const workspaceName = useWorkspace(
     props.workspaceId,
     (workspace) => workspace.title ?? workspace.name,
@@ -69,6 +69,12 @@ export default function contribute(client: PluginClientContext) {
       version: batchOutcomeVersion,
       schema: batchOutcomeSchema,
       Component: BatchOutcome,
+    }),
+    client.addSettingsScreen({
+      id: 'agent',
+      title: 'Task Inbox agent',
+      icon: 'Bot',
+      Component: (props) => <AgentSettings key={props.host.id} {...props} />,
     }),
     client.addSettingsScreen({
       id: 'screenshots',

@@ -1,27 +1,32 @@
-import { useRpc, type PluginSurfaceProps } from '@getpaseo/plugin/client';
+import { useRpc, useSettings, type PluginSurfaceProps } from '@getpaseo/plugin/client';
 import { ExternalLink, Icon, Modal, TextInput } from '@getpaseo/plugin/client/ui';
 import { useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
+import { taskInboxAgentSettings } from '../shared/agent.ts';
 import {
   addInboxItem,
   issueUploadLink,
+  listInboxAgentModels,
   maxBatchItems,
   maxItemScreenshots,
   maxItemText,
   readInbox,
-  startInboxBatch,
+  startInboxBatchInNewChat,
   type InboxItemView,
 } from '../shared/rpc.ts';
 import { Action, Copy, VerifiedPr, statusLabel, type Colors } from './controls.tsx';
 import { errorMessage, useInboxQuery } from './query.ts';
 
 export function WorkspaceInbox({
-  host, layout, theme, navigation, workspaceId, activeAgentId,
-}: PluginSurfaceProps & { workspaceId: string; activeAgentId?: string | null }) {
+  host, layout, theme, navigation, workspaceId,
+}: PluginSurfaceProps & { workspaceId: string }) {
   const read = useRpc(readInbox);
   const add = useRpc(addInboxItem);
-  const start = useRpc(startInboxBatch);
+  const start = useRpc(startInboxBatchInNewChat);
   const issue = useRpc(issueUploadLink);
+  const listModels = useRpc(listInboxAgentModels);
+  const settings = useSettings(taskInboxAgentSettings);
+  const models = useInboxQuery(() => listModels({ workspaceId }), 20_000);
   const { data, error, refresh } = useInboxQuery(() => read({ workspaceId }), 3_000);
   const [draft, setDraft] = useState('');
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(new Set());
@@ -63,10 +68,15 @@ export function WorkspaceInbox({
   const checked = inbox.filter(({ id }) => !excluded.has(id));
   const checkedIds = checked.map(({ id }) => id);
   const batch = data.batch?.status === 'completed' ? null : data.batch;
-  const agent = data.agents.find(({ id }) => id === activeAgentId);
+  const model = settings.status === 'ready'
+    ? models.data?.find(({ value }) => value === settings.values.model)
+    : undefined;
+  const destinationHint = model && !models.error ? `New Task Inbox chat · ${model.label}`
+    : settings.status === 'loading' || (!models.data && !models.error) ? 'Checking available agent models…'
+    : 'Choose an available Codex or Claude Code model under Settings → Plugins → Task Inbox.';
   const batchAgent = data.agents.find(({ id }) => id === batch?.agentId);
   const disabled = Boolean(busy || error);
-  const submitAllowed = !disabled && data.canStart && Boolean(agent) &&
+  const submitAllowed = !disabled && data.canStart && Boolean(model) && !models.error &&
     checkedIds.length > 0 && checkedIds.length <= maxBatchItems;
 
   function toggle(id: string) {
@@ -87,9 +97,6 @@ export function WorkspaceInbox({
 
   return (
     <>
-      {activeAgentId === undefined && (
-        <Copy colors={colors} muted>Update the Paseo app to start work from the active chat.</Copy>
-      )}
       <View style={{ gap: 10 }}>
         <Copy colors={colors} heading size={17}>Capture a bug</Copy>
         <TextInput
@@ -130,7 +137,7 @@ export function WorkspaceInbox({
       {batch && (
         <View style={{ borderColor: colors.border, backgroundColor: colors.surface1, borderWidth: 1, borderRadius: 10, padding: 14, gap: 8 }}>
           <Copy colors={colors} heading size={17}>{statusLabel[batch.status]}</Copy>
-          <Copy colors={colors} muted>{batchAgent?.label ?? 'The batch’s chat is unavailable.'}</Copy>
+          {batchAgent && <Copy colors={colors} muted>{batchAgent.label}</Copy>}
           {batch.detail && <Copy colors={colors}>{batch.detail}</Copy>}
           {navigation && batchAgent && (
             <Action
@@ -159,11 +166,7 @@ export function WorkspaceInbox({
         ))}
         {inbox.length > 0 && (
           <>
-            {activeAgentId !== undefined && (
-              <Copy colors={colors} muted>
-                {agent ? `Send to ${agent.label}` : 'Select an available chat tab in this workspace to start work.'}
-              </Copy>
-            )}
+            <Copy colors={colors} muted>{destinationHint}</Copy>
             {checkedIds.length > maxBatchItems && (
               <Copy colors={colors} error>Select up to {maxBatchItems} bugs for one batch.</Copy>
             )}
@@ -176,8 +179,8 @@ export function WorkspaceInbox({
                 primary
                 disabled={!submitAllowed}
                 onPress={() => {
-                  if (!agent || !submitAllowed) return;
-                  void act('start', () => start({ workspaceId, agentId: agent.id, itemIds: checkedIds }).then(() => undefined));
+                  if (!submitAllowed) return;
+                  void act('start', () => start({ workspaceId, itemIds: checkedIds }).then(() => undefined));
                 }}
               />
               <Copy colors={colors} muted>{checkedIds.length} selected</Copy>

@@ -76,6 +76,7 @@ function finish(state: WorkspaceState, batch: Batch, blocker?: string) {
   batch.phase = "finished";
   batch.status = blocked ? "blocked" : "completed";
   batch.detail = blocked === items.length && blocker ? blocker : `${completed} completed, ${blocked} blocked.`;
+  if (batch.newChat) return;
   const outcome: BatchOutcome = {
     batchId: batch.id,
     items: items.map(({ number, detail, prUrl }) => {
@@ -120,6 +121,34 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
     const workspace = await host.workspace(id);
     if (!workspace || workspace.id !== id) throw new Error("This workspace is unavailable.");
     return workspace;
+  }
+
+  async function reserve(workspace: InboxWorkspace, itemIds: string[], destination: {
+    agentId: string; detail: string; newChat?: Batch["newChat"];
+  }) {
+    const selection = new Set(itemIds);
+    if (selection.size !== itemIds.length || selection.size === 0 || selection.size > maxItems) {
+      throw new Error("Select between 1 and 20 distinct bugs.");
+    }
+    const repository = await host.repository(workspace);
+    if (!repository) throw new Error("This workspace needs a GitHub origin before work can start.");
+    editState(database, workspace.id, (state) => {
+      if (state.batch && state.batch.phase !== "finished") throw new Error("This workspace already has an active batch.");
+      const items = state.items.filter(({ id, status }) => selection.has(id) && status === "inbox");
+      if (items.length !== selection.size) throw new Error("Select bugs from this workspace inbox.");
+      const imageBytes = items.reduce((total, item) => total + imageSize(database, workspace.id, item.id), 0);
+      if (imageBytes > maxBatchImageBytes) throw new Error("Select a batch with up to 24 MiB of images.");
+      const id = randomUUID();
+      state.batch = {
+        ...destination, id, repository, directory: workspace.directory, itemIds: items.map(({ id }) => id),
+        messageId: randomUUID(), text: formatPrompt(id, items), phase: "queued", status: "queued",
+        attempts: 0, attemptedAt: 0, cursor: null, turnId: null, interrupted: false, idleSince: null, assistant: null,
+      };
+      for (const item of items) {
+        item.status = "queued";
+        item.detail = destination.detail;
+      }
+    });
   }
 
   function changeBatch<T>(workspaceId: string, batchId: string, change: (state: WorkspaceState, batch: Batch) => T) {
@@ -277,11 +306,74 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
     });
   }
 
+  async function provisionChat(
+    workspace: InboxWorkspace, batch: Batch, pending: NonNullable<Batch["newChat"]>, agent: InboxAgent | null,
+  ) {
+    if (eligibleChat(agent, batch.agentId, workspace.id)) {
+      changeBatch(workspace.id, batch.id, (_state, current) => { delete current.newChat; });
+      return agent;
+    }
+    if (agent || await host.repository(workspace) !== batch.repository) {
+      changeBatch(workspace.id, batch.id, (state, current) => {
+        if (current.newChat) finish(state, current, "The workspace or the reserved chat changed before dispatch.");
+      });
+      return null;
+    }
+    if (pending.attempts > 0 && now() < pending.attemptedAt + retryDelay) return null;
+    if (pending.attempts >= 3) {
+      changeBatch(workspace.id, batch.id, (state, current) => {
+        if (current.newChat) finish(state, current, "Paseo could not confirm creation of the Task Inbox chat. No batch was sent.");
+      });
+      return null;
+    }
+    if (pending.attempts === 0 && !(await host.agentModels(workspace)).some(({ value }) => value === pending.model)) {
+      const detail = "The Task Inbox model is unavailable. Choose an available model in Task Inbox settings.";
+      changeBatch(workspace.id, batch.id, (state, current) => {
+        if (current.newChat?.attempts !== 0) return;
+        for (const item of selectedItems(state, current)) {
+          item.status = "inbox";
+          item.detail = "";
+        }
+        current.phase = "finished";
+        current.status = "blocked";
+        current.detail = detail;
+      });
+      return null;
+    }
+    const claimed = changeBatch(workspace.id, batch.id, (_state, current) => {
+      if (current.newChat?.attempts !== pending.attempts) return false;
+      current.newChat.attempts += 1;
+      current.newChat.attemptedAt = now();
+      return true;
+    });
+    if (claimed) {
+      try {
+        await host.createAgent(workspace, { agentId: batch.agentId, batchId: batch.id, model: pending.model });
+      } catch {
+        changeBatch(workspace.id, batch.id, (_state, current) => {
+          if (current.newChat?.attempts !== pending.attempts + 1) return;
+          current.status = "blocked";
+          current.detail = "Chat creation is unconfirmed. Task Inbox will look for the original chat before retrying.";
+        });
+      }
+    }
+    return null;
+  }
+
   async function advance(workspaceId: string, initial: Batch) {
     const workspace = await host.workspace(workspaceId);
+    if (!workspace || workspace.id !== workspaceId || workspace.directory !== initial.directory) {
+      changeBatch(workspaceId, initial.id, (state, batch) => {
+        finish(state, batch, "The workspace is unavailable or its directory changed.");
+      });
+      return;
+    }
     let agent = await host.agent(initial.agentId);
-    if (!workspace || workspace.id !== workspaceId || workspace.directory !== initial.directory ||
-        !eligibleChat(agent, initial.agentId, workspaceId)) {
+    if (initial.newChat) {
+      agent = await provisionChat(workspace, initial, initial.newChat, agent);
+      if (!agent) return;
+    }
+    if (!eligibleChat(agent, initial.agentId, workspaceId)) {
       changeBatch(workspaceId, initial.id, (state, batch) => {
         finish(state, batch, "The selected chat is unavailable in this workspace.");
       });
@@ -463,34 +555,26 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
       });
     },
     async start(workspaceId: string, agentId: string, itemIds: string[]) {
-      const selection = new Set(itemIds);
-      if (selection.size !== itemIds.length || selection.size === 0 || selection.size > maxItems) {
-        throw new Error("Select between 1 and 20 distinct bugs.");
-      }
       const workspace = await getWorkspace(workspaceId);
       const agent = await host.agent(agentId);
       if (!eligibleChat(agent, agentId, workspaceId)) {
         throw new Error("Choose an existing chat from this workspace.");
       }
-      const repository = await host.repository(workspace);
-      if (!repository) throw new Error("This workspace needs a GitHub origin before work can start.");
-      editState(database, workspaceId, (state) => {
-        if (state.batch && state.batch.phase !== "finished") throw new Error("This workspace already has an active batch.");
-        const items = state.items.filter(({ id, status }) => selection.has(id) && status === "inbox");
-        if (items.length !== selection.size) throw new Error("Select bugs from this workspace inbox.");
-        const imageBytes = items.reduce((total, item) => total + imageSize(database, workspaceId, item.id), 0);
-        if (imageBytes > maxBatchImageBytes) throw new Error("Select a batch with up to 24 MiB of images.");
-        const id = randomUUID();
-        const detail = waitingFor(agent) ?? "Waiting to send the batch to the selected chat.";
-        state.batch = {
-          id, agentId, repository, directory: workspace.directory, itemIds: items.map(({ id }) => id),
-          messageId: randomUUID(), text: formatPrompt(id, items), phase: "queued", status: "queued", detail,
-          attempts: 0, attemptedAt: 0, cursor: null, turnId: null, interrupted: false, idleSince: null, assistant: null,
-        };
-        for (const item of items) {
-          item.status = "queued";
-          item.detail = detail;
-        }
+      await reserve(workspace, itemIds, { agentId, detail: waitingFor(agent) ?? "Waiting to send the batch to the selected chat." });
+    },
+    async agentModels(workspaceId?: string) {
+      return host.agentModels(workspaceId ? await getWorkspace(workspaceId) : undefined);
+    },
+    async startNew(workspaceId: string, itemIds: string[], model: string) {
+      const workspace = await getWorkspace(workspaceId);
+      if (!model) throw new Error("Choose a model in Task Inbox settings before starting work.");
+      if (!(await host.agentModels(workspace)).some(({ value }) => value === model)) {
+        throw new Error("The Task Inbox model is unavailable. Choose an available model in Task Inbox settings.");
+      }
+      await reserve(workspace, itemIds, {
+        agentId: randomUUID(),
+        detail: "Preparing a new Task Inbox chat.",
+        newChat: { model, attempts: 0, attemptedAt: 0 },
       });
     },
     tick() {
