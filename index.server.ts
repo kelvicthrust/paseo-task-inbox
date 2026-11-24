@@ -3,14 +3,17 @@ import type { PluginHandlerContext, PluginServerContext } from '@getpaseo/plugin
 import { createInbox, hasUnfinishedBatches } from './server/inbox.ts';
 import { paseoHome, wakeLocalInbox } from './server/local-daemon.ts';
 import { createScreenshotUpload } from './server/upload.ts';
+import { taskInboxAgentSettings } from './shared/agent.ts';
 import {
   addInboxItem,
   issueUploadLink,
+  listInboxAgentModels,
   listWorkspaces,
   maxItemScreenshots,
   readInbox,
   readInboxBadge,
   startInboxBatch,
+  startInboxBatchInNewChat,
   wakeInbox,
 } from './shared/rpc.ts';
 import { screenshotSettings } from './shared/screenshot.ts';
@@ -22,6 +25,7 @@ export default function contribute(server: PluginServerContext) {
   const home = paseoHome();
   const dataDir = join(home, 'plugin-data', 'task-inbox');
   const settings = server.registerSettings(screenshotSettings);
+  const agentSettings = server.registerSettings(taskInboxAgentSettings);
   let inbox: ReturnType<typeof createInbox> | undefined;
   let native: Paseo | undefined;
   let drive: Promise<void> | undefined;
@@ -87,6 +91,15 @@ export default function contribute(server: PluginServerContext) {
   });
   server.handle(startInboxBatch, async ({ workspaceId, agentId, itemIds }, { paseo }) => {
     await (await withContext(paseo)).start(workspaceId, agentId, itemIds);
+    wake();
+    return {};
+  });
+  server.handle(listInboxAgentModels, async ({ workspaceId }, { paseo }) =>
+    (await withContext(paseo)).agentModels(workspaceId));
+  server.handle(startInboxBatchInNewChat, async ({ workspaceId, itemIds }, { paseo }) => {
+    const setting = await agentSettings.read();
+    if (setting.status !== 'ready') throw new Error('Repair the model selection in Task Inbox settings.');
+    await (await withContext(paseo)).startNew(workspaceId, itemIds, setting.values.model);
     wake();
     return {};
   });

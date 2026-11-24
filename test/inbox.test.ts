@@ -50,6 +50,8 @@ async function fixture(t: TestContext) {
     workspace: async (id) => id === workspace.id ? state.currentWorkspace : id === anotherWorkspace.id ? anotherWorkspace : null,
     agents: async (id) => id === workspace.id ? [state.agent] : [],
     agent: async (id) => id === agent.id ? state.agent : null,
+    agentModels: async () => [],
+    createAgent: async () => { throw new Error("Unexpected agent creation"); },
     repository: async () => "example/project",
     timeline: async (_agentId, cursor) => {
       if (cursor && cursor.epoch !== state.epoch) {
@@ -158,6 +160,90 @@ test("a lost acknowledgement reconciles from the existing chat without duplicate
   assert.equal(view.items[0].status, "completed");
   assert.equal(view.items[0].prUrl, prUrl);
   assert.match(view.items[0].detail, new RegExp(revision));
+});
+
+test("a new chat survives a lost creation reply and a restart without duplicating the batch", async (t) => {
+  const f = await fixture(t);
+  const created: string[] = [];
+  const sentTo: string[] = [];
+  let nextChat: InboxAgent | null = null;
+  const send = f.host.send;
+  f.host.agent = async (id) => nextChat?.id === id ? nextChat : id === agent.id ? agent : null;
+  f.host.agents = async (id) => id === workspace.id ? [agent, ...(nextChat ? [nextChat] : [])] : [];
+  f.host.agentModels = async () => [{ value: "codex/demo", label: "Codex · Demo" }];
+  f.host.createAgent = async (target, { agentId, batchId, model }) => {
+    assert.equal(target.id, workspace.id);
+    assert.equal(batchId, (await f.inbox.view(workspace.id)).batch?.id);
+    assert.equal(model, "codex/demo");
+    created.push(agentId);
+    nextChat = { ...agent, id: agentId, label: "Task Inbox" };
+    throw new Error("creation reply was lost");
+  };
+  f.host.send = async (id, message) => { sentTo.push(id); await send(id, message); };
+  await f.inbox.add(workspace.id, "Repair keyboard focus");
+  const [item] = (await f.inbox.view(workspace.id)).items;
+  await f.inbox.attach(workspace.id, item.id, "image/png", png);
+  await f.inbox.startNew(workspace.id, [item.id], "codex/demo");
+  const reserved = (await f.inbox.view(workspace.id)).batch!;
+  await assert.rejects(f.inbox.startNew(workspace.id, [item.id], "codex/demo"), /active batch/);
+  await f.inbox.tick();
+  await f.restart();
+  await f.inbox.tick();
+  await f.inbox.tick();
+  assert.deepEqual(created, [reserved.agentId]);
+  assert.deepEqual(sentTo, [reserved.agentId]);
+  assert.deepEqual(f.state.sent[0].images, [{ data: png.toString("base64"), mimeType: "image/png" }]);
+  f.host.canAnnotate = () => false;
+  f.addAssistant(report(reserved.id, item.id, { status: "completed", detail: "Focus restored.", url: prUrl, verification, revision }));
+  await f.inbox.tick();
+  assert.equal((await f.inbox.view(workspace.id)).items[0].prUrl, prUrl);
+});
+
+test("new batches validate their workspace, items and model before creating a chat", async (t) => {
+  const f = await fixture(t);
+  let available = false;
+  f.host.agentModels = async () => available ? [{ value: "claude/demo", label: "Claude Code · Demo" }] : [];
+  await f.inbox.add(workspace.id, "Fix export");
+  const [item] = (await f.inbox.view(workspace.id)).items;
+  await assert.rejects(f.inbox.startNew("missing", [item.id], "claude/demo"), /workspace is unavailable/);
+  await assert.rejects(f.inbox.startNew(workspace.id, [item.id], ""), /Choose a model/);
+  await assert.rejects(f.inbox.startNew(workspace.id, [item.id], "claude/demo"), /model is unavailable/);
+  available = true;
+  await assert.rejects(f.inbox.startNew(anotherWorkspace.id, [item.id], "claude/demo"), /bugs from this workspace/);
+  await assert.rejects(f.inbox.startNew(workspace.id, [item.id, item.id], "claude/demo"), /distinct bugs/);
+  assert.equal((await f.inbox.view(workspace.id)).batch, null);
+  await f.inbox.startNew(workspace.id, [item.id], "claude/demo");
+  available = false;
+  await f.inbox.tick();
+  const view = await f.inbox.view(workspace.id);
+  assert.equal(view.canStart, true);
+  assert.equal(view.items[0].status, "inbox");
+  assert.match(view.batch!.detail, /model is unavailable/);
+  assert.equal(f.state.sent.length, 0);
+});
+
+test("unconfirmed creation retries with the reserved identity and leaves the reports blocked", async (t) => {
+  const f = await fixture(t);
+  const attempts: { agentId: string; batchId: string; model: string }[] = [];
+  f.host.agentModels = async () => [{ value: "codex/demo", label: "Codex · Demo" }];
+  f.host.createAgent = async (_workspace, request) => {
+    attempts.push(request);
+    throw new Error("creation reply was lost");
+  };
+  await f.inbox.add(workspace.id, "Fix search");
+  const [item] = (await f.inbox.view(workspace.id)).items;
+  await f.inbox.startNew(workspace.id, [item.id], "codex/demo");
+  for (let tick = 0; tick < 4; tick++) {
+    await f.inbox.tick();
+    f.state.clock += 60_000;
+  }
+  const view = await f.inbox.view(workspace.id);
+  assert.deepEqual(attempts, Array.from({ length: 3 }, () => ({
+    agentId: view.batch!.agentId, batchId: view.batch!.id, model: "codex/demo",
+  })));
+  assert.equal(view.items[0].status, "blocked");
+  assert.match(view.batch!.detail, /could not confirm creation/);
+  assert.equal(f.state.sent.length, 0);
 });
 
 test("the workspace inbox can target either chat and a started batch stays with its original chat", async (t) => {

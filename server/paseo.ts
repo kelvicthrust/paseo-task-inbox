@@ -1,6 +1,7 @@
 import type { PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { basename } from "node:path";
+import { taskInboxProviders } from "../shared/agent.ts";
 import { batchOutcomeKind, batchOutcomeVersion } from "../shared/outcome.ts";
 import { readOrigin, verifyPullRequest } from "./github.ts";
 import type { InboxAgent, InboxHost, InboxWorkspace, TimelineEntry } from "./inbox-types.ts";
@@ -67,6 +68,28 @@ export function createPaseoHost(paseo: Paseo, getPluginApi: () => Paseo | undefi
     async agent(id) {
       const agent = (await paseo.agents.ref(id).refresh())?.agent;
       return agent?.id === id ? visibleAgent(agent) : null;
+    },
+    async agentModels(workspace) {
+      const { providers, error } = await paseo.providers.listAvailable();
+      if (error) throw new Error("Paseo could not check provider availability.");
+      const models = await Promise.all(Object.entries(taskInboxProviders)
+        .filter(([provider]) => providers.some((entry) => entry.provider === provider && entry.available))
+        .map(async ([provider, label]) => {
+          const result = await paseo.providers.listModels(provider, { cwd: workspace?.directory });
+          return (result.models ?? [])
+            .filter((model) => model.isSelectable !== false)
+            .map((model) => ({ value: `${provider}/${model.id}`, label: `${label} · ${model.label}` }));
+        }));
+      return models.flat();
+    },
+    async createAgent(workspace, { agentId, batchId, model }) {
+      const agent = await paseo.workspaces.ref(workspace.id).agents.create({
+        agentId,
+        idempotencyKey: `task-inbox:${batchId}`,
+        title: "Task Inbox",
+        config: { provider: model },
+      });
+      if (agent.id !== agentId) throw new Error("Paseo did not confirm the requested chat.");
     },
     repository: readOrigin,
     async timeline(agentId, cursor) {

@@ -65,6 +65,8 @@ export interface InboxHost {
   workspace(id: string): Promise<InboxWorkspace | null>;
   agents(workspaceId: string): Promise<InboxAgent[]>;
   agent(id: string): Promise<InboxAgent | null>;
+  agentModels(workspace?: InboxWorkspace): Promise<{ value: string; label: string }[]>;
+  createAgent(workspace: InboxWorkspace, input: { agentId: string; batchId: string; model: string }): Promise<void>;
   repository(workspace: InboxWorkspace): Promise<string | null>;
   timeline(agentId: string, cursor: TimelineCursor | null): Promise<TimelinePage>;
   send(agentId: string, message: BatchMessage): Promise<void>;

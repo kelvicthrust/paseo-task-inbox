@@ -31,6 +31,7 @@ export interface Batch {
   directory: string;
   messageId: string;
   text: string;
+  newChat?: { model: string; attempts: number; attemptedAt: number };
   phase: "queued" | "delivering" | "sent" | "finished";
   status: BatchStatus;
   detail: string;

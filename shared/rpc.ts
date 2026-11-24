@@ -79,6 +79,18 @@ export const startInboxBatch = defineRpc({
   output: ack,
 });
 
+export const listInboxAgentModels = defineRpc({
+  name: 'inbox.agent-models',
+  input: z.strictObject({ workspaceId: id.optional() }),
+  output: z.array(z.object({ value: z.string(), label: z.string() })),
+});
+
+export const startInboxBatchInNewChat = defineRpc({
+  name: 'inbox.start-new',
+  input: workspaceId.extend({ itemIds: z.array(id).min(1).max(maxBatchItems) }),
+  output: ack,
+});
+
 export const issueUploadLink = defineRpc({
   name: 'inbox.screenshot',
   input: workspaceId.extend({ itemId: id, allowLoopback: z.boolean() }),
