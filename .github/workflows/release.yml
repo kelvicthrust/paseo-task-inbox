@@ -232,11 +232,12 @@ jobs:
           }
           release=$(release_by_tag)
           if [[ -z "$release" ]]; then
-            gh release create "$tag" --verify-tag --target "$BUILT_COMMIT" \
-              --draft --generate-notes --title "Paseo Task Inbox $tag"
-            release=$(release_by_tag)
+            # The release list can lag behind draft creation. Use the response's ID.
+            release=$(gh api --method POST "repos/$GH_REPO/releases" \
+              -f tag_name="$tag" -f target_commitish="$BUILT_COMMIT" \
+              -f name="Paseo Task Inbox $tag" -F draft=true -F generate_release_notes=true)
           fi
-          id=$(jq -er 'select(.prerelease == false) | .id' <<< "$release")
+          id=$(jq -er --arg tag "$tag" 'select(.tag_name == $tag and .prerelease == false) | .id | numbers' <<< "$release")
           draft=$(jq -r '.draft' <<< "$release")
           expected=$(sha256sum "$archive" SHA256SUMS |
             jq -Rcs 'split("\n") | map(select(length > 0) | split("  ") |
@@ -256,11 +257,10 @@ jobs:
               echo "The published release is missing verified assets." >&2
               exit 1
             fi
-            missing_assets=()
             while IFS= read -r asset; do
-              missing_assets+=("$asset")
+              gh api --method POST "https://uploads.github.com/repos/$GH_REPO/releases/$id/assets?name=$asset" \
+                -H 'Content-Type: application/octet-stream' --input "$asset" --silent
             done <<< "$missing"
-            gh release upload "$tag" "${missing_assets[@]}"
           fi
 
           if [[ "$draft" == true ]]; then
