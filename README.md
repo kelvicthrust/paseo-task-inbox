@@ -91,7 +91,7 @@ npm run pack:release
 npm run test:package
 ```
 
-See the [maintainer release guide](https://github.com/kelvicthrust/paseo-task-inbox/blob/main/docs/releasing.md) for GitHub Actions releases, npm archive verification, and Paseo catalog submission.
+See the [maintainer release guide](docs/releasing.md) for GitHub Actions releases, npm archive verification, and Paseo catalog submission.
 
 ## License
 
