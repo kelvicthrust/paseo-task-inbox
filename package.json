@@ -1,6 +1,6 @@
 {
   "name": "@kelvicthrust/paseo-task-inbox",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Collect bugs and screenshots in Paseo, start a chat to fix a batch, and track verified fixes.",
   "license": "MIT",

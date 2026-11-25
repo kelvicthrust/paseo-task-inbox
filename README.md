@@ -14,7 +14,7 @@ For dispatch and verification, use a workspace with a GitHub `origin`, Codex or 
 
 In Paseo, select that host and turn on **Enable plugins** under **Settings → Plugins**. Paseo plugins are trusted code and run with the daemon user's file and process access. [Paseo plugin setup](https://paseo.sh/docs/plugins)
 
-To attach screenshots before submitting or to edit and delete waiting tasks, [install from source](#install-from-source). If you install version 0.2.0, save the task first, then choose **Attach screenshot**. [Version 0.2.0 instructions](https://github.com/kelvicthrust/paseo-task-inbox/blob/v0.2.0/README.md#capture-and-send-bugs)
+In 1.0.0 you can edit or delete waiting tasks and, on Desktop and web, attach screenshots before submitting. If the catalog still offers 0.2.0, use the versioned npm command below to install 1.0.0. On 0.2.0, save the task first, then choose **Attach screenshot**. [Version 0.2.0 instructions](https://github.com/kelvicthrust/paseo-task-inbox/blob/v0.2.0/README.md#capture-and-send-bugs)
 
 ### Install from the Paseo catalog
 
@@ -31,7 +31,7 @@ In the app, enter `kelvicthrust/task-inbox` as the source under **Settings → P
 Use a versioned npm source to test a particular release directly.
 
 ```sh
-paseo plugin install 'npm:@kelvicthrust/paseo-task-inbox@0.2.0'
+paseo plugin install 'npm:@kelvicthrust/paseo-task-inbox@1.0.0'
 ```
 
 ### Install from source
