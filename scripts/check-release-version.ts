@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { URL } from 'node:url';
 
 export const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -28,6 +28,21 @@ export function selectReleaseVersion(version: unknown, previous?: string): strin
 
 if (import.meta.main) {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  const version = selectReleaseVersion(manifest.version, process.argv[2]);
-  if (version) console.log(version);
+  const previous = process.argv[2];
+  const finalize = previous === '--finalize';
+  const version = selectReleaseVersion(manifest.version, finalize ? undefined : previous);
+  if (!version) process.exit(0);
+  if (previous !== undefined) {
+    const path = `docs/releases/v${version}.md`;
+    const notes = new URL(`../${path}`, import.meta.url);
+    const heading = `# What's new in v${version}`;
+    if (!existsSync(notes)) {
+      throw new Error(`Create ${path} before releasing v${version}.`);
+    }
+    const [firstLine, ...body] = readFileSync(notes, 'utf8').trim().split(/\r?\n/);
+    if (firstLine !== heading || !body.some((line) => line.trim() !== '')) {
+      throw new Error(`${path} needs the heading "${heading}" and release notes below it.`);
+    }
+  }
+  console.log(version);
 }
