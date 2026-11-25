@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 
-import { useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 
 function transferFiles(transfer: DataTransfer): File[] {
   if (transfer.files.length) return Array.from(transfer.files);
@@ -10,11 +10,30 @@ function transferFiles(transfer: DataTransfer): File[] {
   });
 }
 
+export function useKeyboardNavigation(web: boolean) {
+  const keyboard = useRef(true);
+  useEffect(() => {
+    if (!web) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.isComposing) keyboard.current = true;
+    };
+    const onPointerDown = () => { keyboard.current = false; };
+    document.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  }, [web]);
+  return keyboard;
+}
+
 export function BrowserFileCapture({
-  children, onFiles, disabled,
+  children, onFiles, onPointerInput, disabled,
 }: {
   children: (chooseFiles: () => void) => ReactNode;
   onFiles: (files: File[]) => void;
+  onPointerInput: () => void;
   disabled: boolean;
 }) {
   const picker = useRef<HTMLInputElement>(null);
@@ -22,6 +41,7 @@ export function BrowserFileCapture({
   return (
     <div
       style={{ minWidth: 0 }}
+      onPointerDownCapture={onPointerInput}
       onDragOver={(event) => {
         if (!event.dataTransfer.types.includes('Files')) return;
         event.preventDefault();

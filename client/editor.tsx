@@ -1,7 +1,7 @@
 import type { RpcOutput } from '@getpaseo/plugin';
 import { useRpc } from '@getpaseo/plugin/client';
 import { Icon, TextInput } from '@getpaseo/plugin/client/ui';
-import { useEffect, useRef, useState, type Ref } from 'react';
+import { useEffect, useRef, useState, type Ref, type RefObject } from 'react';
 import { Image, Text, View, type TextInput as InputHandle } from 'react-native';
 import {
   appendInboxImageChunk,
@@ -45,7 +45,7 @@ function toExisting(image: StoredScreenshot): ExistingScreenshot {
 }
 
 export function TaskEditor({
-  workspaceId, colors, web, disabled, initial, currentItem, inputRef, onClose, onSaved, chatAction,
+  workspaceId, colors, web, disabled, initial, currentItem, inputRef, keyboardNavigation, onClose, onSaved, chatAction,
 }: {
   workspaceId: string;
   colors: Colors;
@@ -54,6 +54,7 @@ export function TaskEditor({
   initial?: ReadyInboxItem;
   currentItem?: InboxItemView | null;
   inputRef: Ref<InputHandle>;
+  keyboardNavigation: RefObject<boolean>;
   onClose?: () => void;
   onSaved: () => void;
   chatAction?: (id?: string) => (() => void) | undefined;
@@ -72,7 +73,7 @@ export function TaskEditor({
   const [attempt, setAttempt] = useState<SaveInboxItemInput>();
   const attemptRef = useRef<SaveInboxItemInput>(undefined);
   const [saving, setSaving] = useState(false);
-  const [focused, setFocused] = useState(false);
+  const [showFocus, setShowFocus] = useState(false);
   const [rejected, setRejected] = useState<string>();
   const [error, setError] = useState<string>();
   const [conflict, setConflict] = useState<ItemConflict>();
@@ -248,7 +249,7 @@ export function TaskEditor({
     return (
       <View style={{
         backgroundColor: colors.surface1,
-        borderColor: focused ? colors.accent : colors.border,
+        borderColor: showFocus ? colors.accent : colors.border,
         borderRadius: 10, borderWidth: 1, padding: 10, gap: 6,
       }}>
         <Copy colors={colors} heading size={14}>{source ? `Editing task #${source.item.number}` : 'New task'}</Copy>
@@ -259,8 +260,8 @@ export function TaskEditor({
           placeholderTextColor={colors.foregroundMuted}
           selectionColor={colors.accent}
           editable={!readOnly}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          onFocus={() => setShowFocus(!web || keyboardNavigation.current)}
+          onBlur={() => setShowFocus(false)}
           multiline
           maxLength={maxItemText}
           value={text}
@@ -271,6 +272,7 @@ export function TaskEditor({
           style={{
             minHeight: 76, paddingHorizontal: 0, paddingVertical: 4, color: colors.foreground,
             fontSize: 14, lineHeight: 20, textAlignVertical: 'top',
+            ...(web && { outlineWidth: 0 }),
           }}
         />
         {images.map((image, index) => {
@@ -334,7 +336,21 @@ export function TaskEditor({
         )}
         {problem?.status === 'missing' && <Copy colors={colors} error size={13}>This task was deleted. Your edit is still here.</Copy>}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 1, flexWrap: 'wrap' }}>
+          {choose && !problem && (
+            <Action
+              colors={colors}
+              label="Attach"
+              accessibilityLabel="Choose screenshots"
+              icon="Paperclip"
+              subtle compact={web}
+              disabled={readOnly || images.length >= maxItemScreenshots}
+              onPress={choose}
+            />
+          )}
+          <View style={{
+            marginLeft: problem ? undefined : 'auto', maxWidth: '100%', flexDirection: 'row',
+            alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 4,
+          }}>
             {onClose && (
               <Action
                 colors={colors}
@@ -344,27 +360,16 @@ export function TaskEditor({
                 onPress={onClose}
               />
             )}
-            {choose && !problem && (
+            {!problem && (
               <Action
                 colors={colors}
-                label="Attach"
-                accessibilityLabel="Choose screenshots"
-                icon="Paperclip"
-                subtle compact={web}
-                disabled={readOnly || images.length >= maxItemScreenshots}
-                onPress={choose}
+                label={saving ? 'Saving…' : attempt ? 'Retry save' : source ? 'Save changes' : 'Add task'}
+                primary compact={web}
+                disabled={!canSave}
+                onPress={() => void save()}
               />
             )}
           </View>
-          {!problem && (
-            <Action
-              colors={colors}
-              label={saving ? 'Saving…' : attempt ? 'Retry save' : source ? 'Save changes' : 'Add task'}
-              primary compact={web}
-              disabled={!canSave}
-              onPress={() => void save()}
-            />
-          )}
         </View>
         {web && !problem && images.length < maxItemScreenshots && (
           <Copy colors={colors} muted size={12}>Paste or drop a PNG or JPEG.</Copy>
@@ -374,7 +379,11 @@ export function TaskEditor({
     );
   }
 
-  return web ? <BrowserFileCapture disabled={readOnly} onFiles={addFiles}>{composer}</BrowserFileCapture> : composer();
+  return web ? (
+    <BrowserFileCapture disabled={readOnly} onFiles={addFiles} onPointerInput={() => setShowFocus(false)}>
+      {composer}
+    </BrowserFileCapture>
+  ) : composer();
 }
 
 function Thumbnail({
