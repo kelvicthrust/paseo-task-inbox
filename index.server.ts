@@ -6,12 +6,19 @@ import { createScreenshotUpload } from './server/upload.ts';
 import { taskInboxAgentSettings } from './shared/agent.ts';
 import {
   addInboxItem,
+  appendInboxImageChunk,
+  beginInboxImage,
+  deleteInboxItem,
+  discardInboxImages,
   issueUploadLink,
   listInboxAgentModels,
   listWorkspaces,
   maxItemScreenshots,
   readInbox,
   readInboxBadge,
+  readInboxImageChunk,
+  readInboxItem,
+  saveInboxItem,
   startInboxBatch,
   startInboxBatchInNewChat,
   wakeInbox,
@@ -89,6 +96,13 @@ export default function contribute(server: PluginServerContext) {
     await (await withContext(paseo)).add(workspaceId, text);
     return {};
   });
+  server.handle(readInboxItem, async (input, { paseo }) => (await withContext(paseo)).readItem(input));
+  server.handle(readInboxImageChunk, async (input, { paseo }) => (await withContext(paseo)).readImageChunk(input));
+  server.handle(beginInboxImage, async (input, { paseo }) => (await withContext(paseo)).beginImage(input));
+  server.handle(appendInboxImageChunk, async (input, { paseo }) => (await withContext(paseo)).appendImageChunk(input));
+  server.handle(discardInboxImages, async (input, { paseo }) => (await withContext(paseo)).discardImages(input));
+  server.handle(saveInboxItem, async (input, { paseo }) => (await withContext(paseo)).saveItem(input));
+  server.handle(deleteInboxItem, async (input, { paseo }) => (await withContext(paseo)).deleteItem(input));
   server.handle(startInboxBatch, async ({ workspaceId, agentId, itemIds }, { paseo }) => {
     await (await withContext(paseo)).start(workspaceId, agentId, itemIds);
     wake();

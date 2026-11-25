@@ -74,7 +74,7 @@ export function ScreenshotSettings({ host }: PluginSurfaceProps) {
           <>
             <SettingsInput
               label="Private Tailscale address"
-              hint="Use this host’s HTTPS Tailscale Serve address for phone or remote desktop uploads. Leave blank for a browser on this host."
+              hint="Use this host’s HTTPS Tailscale Serve address for the native mobile browser uploader. Desktop and web attach directly in Task Inbox."
               key={settings.revision}
               initialValue={savedOrigin}
               onChangeText={setOrigin}

@@ -4,7 +4,7 @@
 
 Capture bugs and screenshots while you test in Paseo. Start a batch from the workspace’s right-side Explorer and Task Inbox opens a Codex or Claude Code chat to work on it. Keep capturing bugs while the agent works, and find verified fixes with links to their pull requests.
 
-![The right-side Task Inbox panel with sample bugs and the configured model for Start work](assets/task-inbox.png)
+![The Task Inbox composer with a screenshot attached, three waiting tasks and the batch footer](assets/task-inbox.png)
 
 ## Get started
 
@@ -51,18 +51,18 @@ Before you send your first batch, go to **Settings → Plugins → Task Inbox**.
 
 ## Capture and send bugs
 
-1. Open the workspace inbox. Describe what went wrong and select **Add to inbox**. You can capture bugs without starting an agent turn.
-2. To include an image, select **Attach screenshot** on the bug and open the browser picker. Each link accepts one PNG or JPEG and expires after five minutes.
-3. Select the bugs to fix, check the model shown beside **Start work**, and start the batch. Task Inbox creates a visible chat in that workspace, even when the main pane shows a terminal.
-4. Follow the batch in Task Inbox or select **Open chat**. The batch stays with that chat when you switch tabs or reload.
+1. In the workspace inbox, describe what went wrong. On Desktop or web, choose **Attach**, paste a screenshot into the composer, or drop an image onto it. Check the preview and remove any unwanted images before selecting **Add task**.
+2. To correct a waiting task, open its **⋯** menu and choose **Edit task**. Update the description or screenshots and save. Choose **Delete task** and confirm to remove the report and its images. Once a batch claims a task, its contents are fixed.
+3. Select the tasks to fix, check the model in the footer, and start the batch. Task Inbox creates a visible chat in that workspace, even when the main pane shows a terminal.
+4. Follow the batch in Task Inbox or select **Open chat**. You can keep capturing reports while the batch runs. Switching tabs or reloading returns you to the same batch and chat.
 
 All chats in the workspace share one inbox. Task Inbox allows one active batch per workspace, with up to 20 bugs and 24 MiB of images per batch. Each bug can have up to four images of 8 MiB each.
 
-If **Start work** asks for a model, choose an available one in **Task Inbox agent**. You can still capture bugs and attach screenshots.
+If the batch footer asks for a model, choose an available one in **Task Inbox agent**. You can still capture bugs and attach screenshots.
 
-### Upload screenshots from another device
+### Attach screenshots from native mobile
 
-A browser on the daemon host can use the built-in loopback uploader with the screenshot address left blank. For a phone, desktop app, or browser on another device, use private Tailscale Serve on the daemon host. Check `tailscale serve status` first and choose an unused HTTPS port. For example:
+Desktop and web send images through the existing Paseo connection, including when the daemon is remote. Leave the private upload address blank for those clients. On native mobile, save the report first and use its screenshot action to open the private browser uploader. Each link accepts one PNG or JPEG and expires after five minutes. Configure private Tailscale Serve on the daemon host for this path. Check `tailscale serve status` first and choose an unused HTTPS port. For example:
 
 ```sh
 tailscale serve --bg --https=47831 http://127.0.0.1:47831

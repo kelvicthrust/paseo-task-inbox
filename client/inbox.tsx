@@ -1,53 +1,84 @@
 import { useRpc, useSettings, type PluginSurfaceProps } from '@getpaseo/plugin/client';
-import { ExternalLink, Icon, Modal, TextInput } from '@getpaseo/plugin/client/ui';
-import { useRef, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { ExternalLink, Modal } from '@getpaseo/plugin/client/ui';
+import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
+import { Text, View, type ScrollView, type TextInput } from 'react-native';
 import { taskInboxAgentSettings } from '../shared/agent.ts';
 import {
-  addInboxItem,
+  deleteInboxItem,
   issueUploadLink,
   listInboxAgentModels,
   maxBatchItems,
   maxItemScreenshots,
-  maxItemText,
   readInbox,
+  readInboxItem,
   startInboxBatchInNewChat,
   type InboxItemView,
 } from '../shared/rpc.ts';
-import { Action, Copy, VerifiedPr, statusLabel, type Colors } from './controls.tsx';
+import { Action, Copy, IconAction, Page, VerifiedPr, statusLabel, type Colors } from './controls.tsx';
+import { TaskEditor, type ReadyInboxItem } from './editor.tsx';
 import { errorMessage, useInboxQuery } from './query.ts';
 
+type Operation = 'start' | 'edit' | 'delete' | 'attach';
+type FocusTarget = { kind: 'new' | 'edit' | 'menu' } | { kind: 'row'; id: string };
+
 export function WorkspaceInbox({
-  host, layout, theme, navigation, workspaceId,
-}: PluginSurfaceProps & { workspaceId: string }) {
+  host, layout, theme, navigation, workspaceId, workspaceName,
+}: PluginSurfaceProps & { workspaceId: string; workspaceName?: string }) {
   const read = useRpc(readInbox);
-  const add = useRpc(addInboxItem);
+  const readItem = useRpc(readInboxItem);
+  const deleteItem = useRpc(deleteInboxItem);
   const start = useRpc(startInboxBatchInNewChat);
   const issue = useRpc(issueUploadLink);
   const listModels = useRpc(listInboxAgentModels);
   const settings = useSettings(taskInboxAgentSettings);
   const models = useInboxQuery(() => listModels({ workspaceId }), 20_000);
   const { data, error, refresh } = useInboxQuery(() => read({ workspaceId }), 3_000);
-  const [draft, setDraft] = useState('');
-  const [excluded, setExcluded] = useState<ReadonlySet<string>>(new Set());
-  const [busy, setBusy] = useState<'add' | 'start' | 'attach'>();
-  const [message, setMessage] = useState<string>();
-  const [upload, setUpload] = useState<{ url: string; number: number }>();
+  const [excluded, setExcluded] = useState<ReadonlySet<string>>(() => new Set());
+  const [busy, setBusy] = useState<Operation>();
+  const [startError, setStartError] = useState<string>();
+  const [rowError, setRowError] = useState<{ message: string; chatId?: string }>();
+  const [menu, setMenu] = useState<string>();
+  const [editing, setEditing] = useState<ReadyInboxItem>();
+  const [deleting, setDeleting] = useState<InboxItemView>();
+  const [deleteError, setDeleteError] = useState<string>();
+  const [upload, setUpload] = useState<{ url: string; number: number; itemId: string }>();
+  const [completedOpen, setCompletedOpen] = useState(false);
+  const [focus, setFocus] = useState<FocusTarget>();
   const lock = useRef(false);
+  const newInput = useRef<TextInput>(null);
+  const editInput = useRef<TextInput>(null);
+  const scroll = useRef<ScrollView>(null);
+  const menuFirst = useRef<View>(null);
+  const rowButtons = useRef(new Map<string, View>());
   const colors = theme.colors;
+  const web = layout.platform === 'web';
 
-  async function act(kind: NonNullable<typeof busy>, work: () => Promise<void>) {
-    if (lock.current || error) return;
+  useEffect(() => {
+    if (!focus || busy) return;
+    setFocus(undefined);
+    if (focus.kind === 'edit') {
+      scroll.current?.scrollTo({ y: 0, animated: false });
+      editInput.current?.focus();
+    } else if (focus.kind === 'row') {
+      (rowButtons.current.get(focus.id) ?? newInput.current)?.focus();
+    } else if (focus.kind === 'menu') {
+      menuFirst.current?.focus();
+    } else {
+      newInput.current?.focus();
+    }
+  }, [focus, busy]);
+
+  async function act(kind: Operation, work: () => Promise<void>, report: (message: string | undefined) => void) {
+    if (lock.current) return;
     lock.current = true;
     setBusy(kind);
-    setMessage(undefined);
+    report(undefined);
     try {
       await work();
-      await refresh();
     } catch (problem) {
-      setMessage(errorMessage(problem));
-      await refresh();
+      report(errorMessage(problem));
     } finally {
+      await refresh();
       lock.current = false;
       setBusy(undefined);
     }
@@ -55,31 +86,43 @@ export function WorkspaceInbox({
 
   if (!data) {
     return (
-      <View style={{ gap: 8 }}>
-        <Copy colors={colors} error={Boolean(error)}>{error ?? 'Loading Task Inbox…'}</Copy>
-        {error && <Action colors={colors} label="Retry" onPress={refresh} />}
-      </View>
+      <Page theme={theme}>
+        <View style={{ gap: 8 }}>
+          <Copy colors={colors} error={Boolean(error)}>{error ?? 'Loading Task Inbox…'}</Copy>
+          {error && <Action colors={colors} label="Retry" onPress={refresh} />}
+        </View>
+      </Page>
     );
   }
 
   const inbox = data.items.filter(({ status }) => status === 'inbox');
   const inFlight = data.items.filter(({ status }) => status !== 'inbox' && status !== 'completed');
   const completed = data.items.filter(({ status }) => status === 'completed');
-  const checked = inbox.filter(({ id }) => !excluded.has(id));
-  const checkedIds = checked.map(({ id }) => id);
+  const checkedIds = inbox.filter(({ id }) => !excluded.has(id)).map(({ id }) => id);
   const batch = data.batch?.status === 'completed' ? null : data.batch;
-  const model = settings.status === 'ready'
-    ? models.data?.find(({ value }) => value === settings.values.model)
-    : undefined;
-  const destinationHint = model && !models.error ? `New Task Inbox chat · ${model.label}`
-    : settings.status === 'loading' || (!models.data && !models.error) ? 'Checking available agent models…'
-    : 'Choose an available Codex or Claude Code model under Settings → Plugins → Task Inbox.';
+  const model = settings.status === 'ready' ? models.data?.find(({ value }) => value === settings.values.model) : undefined;
+  const modelHint = model && !models.error ? undefined
+    : models.error ? 'Couldn’t check available agent models.'
+    : settings.status === 'loading' || !models.data ? 'Checking available agent models…'
+    : 'Choose an agent model in Settings → Plugins → Task Inbox agent.';
   const batchAgent = data.agents.find(({ id }) => id === batch?.agentId);
-  const disabled = Boolean(busy || error);
-  const submitAllowed = !disabled && data.canStart && Boolean(model) && !models.error &&
+  const canStart = !busy && !error && !editing && !deleting && data.canStart && Boolean(model) && !models.error &&
     checkedIds.length > 0 && checkedIds.length <= maxBatchItems;
+  const currentEdit = editing && data.items.find(({ id }) => id === editing.item.id);
+  const currentDelete = deleting && data.items.find(({ id }) => id === deleting.id);
+
+  function chatAction(id?: string) {
+    if (id && navigation && data?.agents.some((agent) => agent.id === id)) {
+      return () => navigation.openAgent({ serverId: host.id, agentId: id });
+    }
+    return undefined;
+  }
+
+  const openBatchChat = chatAction(batch?.agentId);
+  const openRowChat = chatAction(rowError?.chatId);
 
   function toggle(id: string) {
+    setMenu(undefined);
     setExcluded((previous) => {
       const next = new Set(previous);
       if (!next.delete(id)) next.add(id);
@@ -87,128 +130,205 @@ export function WorkspaceInbox({
     });
   }
 
-  function attach(item: InboxItemView) {
-    void act('attach', async () => {
-      // A web client may use loopback only where no private address has been configured.
-      const link = await issue({ workspaceId, itemId: item.id, allowLoopback: layout.platform === 'web' });
-      setUpload({ ...link, number: item.number });
+  function toggleMenu(id: string) {
+    if (menu === id) {
+      setMenu(undefined);
+      setFocus({ kind: 'row', id });
+    } else {
+      setMenu(id);
+      setFocus({ kind: 'menu' });
+    }
+  }
+
+  function openEditor(item: InboxItemView) {
+    setMenu(undefined);
+    void act('edit', async () => {
+      const result = await readItem({ workspaceId, itemId: item.id });
+      if (result.status === 'ready') {
+        setEditing(result);
+        setFocus({ kind: 'edit' });
+      } else {
+        setRowError(result.status === 'claimed'
+          ? { message: `Task #${item.number} has already been sent to chat.`, chatId: result.item.chatId }
+          : { message: `Task #${item.number} was deleted.` });
+        setFocus({ kind: 'new' });
+      }
+    }, (message) => {
+      setRowError(message ? { message } : undefined);
+      if (message) setFocus({ kind: 'row', id: item.id });
     });
   }
 
-  return (
+  function closeEditor() {
+    setEditing(undefined);
+    if (editing && currentEdit?.status === 'inbox') setFocus({ kind: 'row', id: editing.item.id });
+    else setFocus({ kind: 'new' });
+  }
+
+  function confirmDelete(item: InboxItemView) {
+    setMenu(undefined);
+    setDeleteError(undefined);
+    setDeleting(item);
+  }
+
+  function closeDelete(id: string) {
+    setDeleting(undefined);
+    setFocus({ kind: 'row', id });
+  }
+
+  function deleteTask(item: InboxItemView) {
+    void act('delete', async () => {
+      const result = await deleteItem({ workspaceId, itemId: item.id, version: item.version });
+      if (result.status === 'deleted' || result.status === 'missing') {
+        const index = inbox.findIndex(({ id }) => id === item.id);
+        const next = index < 0 ? inbox[0] : (inbox[index + 1] ?? inbox[index - 1]);
+        setDeleting(undefined);
+        setFocus(next ? { kind: 'row', id: next.id } : { kind: 'new' });
+      } else if (result.status === 'stale') {
+        setDeleting(result.item);
+        setDeleteError('This task changed. Review the current description before deleting.');
+      } else {
+        setDeleting(result.item);
+        setDeleteError('This task has already been sent to chat.');
+      }
+    }, setDeleteError);
+  }
+
+  function attach(item: InboxItemView) {
+    setMenu(undefined);
+    void act('attach', async () => {
+      const link = await issue({ workspaceId, itemId: item.id, allowLoopback: web });
+      setUpload({ ...link, number: item.number, itemId: item.id });
+    }, (message) => {
+      setRowError(message ? { message } : undefined);
+      if (message) setFocus({ kind: 'row', id: item.id });
+    });
+  }
+
+  const batchFooter = (
     <>
-      <View style={{ gap: 10 }}>
-        <Copy colors={colors} heading size={17}>Capture a bug</Copy>
-        <TextInput
-          accessibilityLabel="Bug description"
-          placeholder="What went wrong?"
-          placeholderTextColor={colors.foregroundMuted}
-          editable={!disabled}
-          multiline
-          maxLength={maxItemText}
-          value={draft}
-          onChangeText={setDraft}
-          style={{
-            minHeight: 96,
-            borderColor: colors.border,
-            borderWidth: 1,
-            backgroundColor: colors.surface1,
-            borderRadius: 9,
-            padding: 12,
-            color: colors.foreground,
-            fontSize: 15,
-            textAlignVertical: 'top',
-          }}
-        />
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+          <Copy colors={colors} heading size={13}>{checkedIds.length} selected</Copy>
+          {model && <Copy colors={colors} muted size={12}>{model.label}</Copy>}
+        </View>
         <Action
           colors={colors}
-          label={busy === 'add' ? 'Adding…' : 'Add to inbox'}
-          icon="Plus"
-          disabled={disabled || !draft.trim()}
-          onPress={() => void act('add', async () => {
-            await add({ workspaceId, text: draft.trim() });
-            setDraft('');
-          })}
+          label={busy === 'start' ? 'Starting…' : !data.canStart ? 'Batch active' : checkedIds.length ? `Start ${checkedIds.length} ${checkedIds.length === 1 ? 'task' : 'tasks'}` : 'Start work'}
+          icon="Play"
+          primary compact={web}
+          disabled={!canStart}
+          onPress={() => {
+            if (!canStart) return;
+            void act('start', async () => { await start({ workspaceId, itemIds: checkedIds }); }, setStartError);
+          }}
         />
-        {(message || error) && <Copy colors={colors} error>{message ?? error}</Copy>}
-        {error && <Action colors={colors} label="Retry" onPress={refresh} />}
       </View>
+      {modelHint && <Copy colors={colors} muted size={12}>{modelHint}</Copy>}
+      {checkedIds.length > maxBatchItems && <Copy colors={colors} error size={12}>Select up to {maxBatchItems} tasks for one batch.</Copy>}
+      {editing && !batch && <Copy colors={colors} muted size={12}>Close the editor before starting work.</Copy>}
+      {startError && <Copy colors={colors} error size={13}>{startError}</Copy>}
+    </>
+  );
 
+  return (
+    <Page theme={theme} footer={batchFooter} scrollRef={scroll}>
+      {workspaceName && <Copy colors={colors} heading size={19}>{workspaceName}</Copy>}
+      <View style={editing ? { display: 'none' } : undefined}>
+        <TaskEditor
+          workspaceId={workspaceId} colors={colors} web={web} disabled={Boolean(busy)} inputRef={newInput}
+          onSaved={() => { void refresh(); setFocus({ kind: 'new' }); }}
+        />
+      </View>
+      {editing && (
+        <TaskEditor
+          key={editing.item.id}
+          workspaceId={workspaceId} colors={colors} web={web} disabled={Boolean(busy)}
+          initial={editing} currentItem={currentEdit ?? (error ? undefined : null)} inputRef={editInput}
+          onClose={closeEditor}
+          onSaved={() => { closeEditor(); void refresh(); }}
+          chatAction={chatAction}
+        />
+      )}
+      {error && (
+        <View style={{ gap: 5 }}>
+          <Copy colors={colors} error>{error}</Copy>
+          <Action colors={colors} label="Retry inbox" compact={web} onPress={refresh} />
+        </View>
+      )}
       {batch && (
-        <View style={{ borderColor: colors.border, backgroundColor: colors.surface1, borderWidth: 1, borderRadius: 10, padding: 14, gap: 8 }}>
-          <Copy colors={colors} heading size={17}>{statusLabel[batch.status]}</Copy>
-          {batchAgent && <Copy colors={colors} muted>{batchAgent.label}</Copy>}
-          {batch.detail && <Copy colors={colors}>{batch.detail}</Copy>}
-          {navigation && batchAgent && (
-            <Action
-              colors={colors}
-              label="Open chat"
-              icon="MessageSquare"
-              onPress={() => navigation.openAgent({ serverId: host.id, agentId: batch.agentId })}
-            />
+        <View style={{ borderRadius: 8, borderWidth: 1, borderColor: colors.border, padding: 10, gap: 4 }}>
+          <Copy colors={colors} heading size={14}>Batch · {statusLabel[batch.status]}</Copy>
+          {batchAgent && <Copy colors={colors} muted size={12}>{batchAgent.label}</Copy>}
+          {batch.detail && <Copy colors={colors} size={13}>{batch.detail}</Copy>}
+          {openBatchChat && (
+            <Action colors={colors} label="Open chat" icon="MessageSquare" compact={web} onPress={openBatchChat} />
           )}
         </View>
       )}
-
-      <View style={{ gap: 10 }}>
-        <Copy colors={colors} heading size={17}>Inbox{inbox.length ? ` · ${inbox.length}` : ''}</Copy>
-        {inbox.length === 0 && <Copy colors={colors} muted>No captured bugs waiting.</Copy>}
+      <View style={{ gap: 4 }}>
+        <Copy colors={colors} heading size={16}>Inbox{inbox.length ? ` · ${inbox.length}` : ''}</Copy>
+        {rowError && (
+          <View style={{ gap: 3 }}>
+            <Copy colors={colors} error size={13}>{rowError.message}</Copy>
+            {openRowChat && (
+              <Action colors={colors} label="Open chat" icon="MessageSquare" compact={web} onPress={openRowChat} />
+            )}
+          </View>
+        )}
+        {inbox.length === 0 && <Copy colors={colors} muted size={13}>No tasks waiting.</Copy>}
         {inbox.map((item) => (
-          <Item
+          <InboxRow
             key={item.id}
             item={item}
             colors={colors}
+            web={web}
             checked={!excluded.has(item.id)}
-            toggle={disabled ? undefined : () => toggle(item.id)}
-            attach={() => attach(item)}
-            disabled={disabled}
+            toggle={() => toggle(item.id)}
+            expanded={menu === item.id}
+            toggleMenu={() => toggleMenu(item.id)}
+            menuButtonRef={(button) => {
+              if (button) rowButtons.current.set(item.id, button);
+              else rowButtons.current.delete(item.id);
+            }}
+            firstMenuActionRef={menuFirst}
+            disabled={Boolean(busy || editing || deleting)}
+            edit={() => openEditor(item)}
+            deleteTask={() => confirmDelete(item)}
+            attach={!web && item.images < maxItemScreenshots ? () => attach(item) : undefined}
           />
         ))}
-        {inbox.length > 0 && (
-          <>
-            <Copy colors={colors} muted>{destinationHint}</Copy>
-            {checkedIds.length > maxBatchItems && (
-              <Copy colors={colors} error>Select up to {maxBatchItems} bugs for one batch.</Copy>
-            )}
-            {!data.canStart && <Copy colors={colors} muted>New bugs can be added while the current batch runs.</Copy>}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <Action
-                colors={colors}
-                label={busy === 'start' ? 'Starting…' : 'Start work'}
-                icon="Play"
-                primary
-                disabled={!submitAllowed}
-                onPress={() => {
-                  if (!submitAllowed) return;
-                  void act('start', () => start({ workspaceId, itemIds: checkedIds }).then(() => undefined));
-                }}
-              />
-              <Copy colors={colors} muted>{checkedIds.length} selected</Copy>
-            </View>
-          </>
-        )}
       </View>
-
       {inFlight.length > 0 && (
-        <View style={{ gap: 10 }}>
-          <Copy colors={colors} heading size={17}>Sent to chat</Copy>
-          {inFlight.map((item) => <Item key={item.id} item={item} colors={colors} batchDetail={batch?.detail} />)}
+        <View style={{ gap: 4 }}>
+          <Copy colors={colors} heading size={16}>Sent to chat</Copy>
+          {inFlight.map((item) => <HistoryRow key={item.id} item={item} colors={colors} batchDetail={batch?.detail} />)}
         </View>
       )}
-
-      <View style={{ gap: 10 }}>
-        <Copy colors={colors} heading size={17}>Completed{completed.length ? ` · ${completed.length}` : ''}</Copy>
-        {completed.length === 0 && <Copy colors={colors} muted>No verified fixes yet.</Copy>}
-        {completed.map((item) => <Item key={item.id} item={item} colors={colors} />)}
-      </View>
-
+      {completed.length > 0 && (
+        <View style={{ gap: 4 }}>
+          <Action
+            colors={colors} label={`Completed · ${completed.length}`} icon={completedOpen ? 'ChevronDown' : 'ChevronRight'}
+            compact={web} subtle expanded={completedOpen} onPress={() => setCompletedOpen(!completedOpen)}
+          />
+          {completedOpen && completed.map((item) => <HistoryRow key={item.id} item={item} colors={colors} />)}
+        </View>
+      )}
+      {deleting && (
+        <DeleteConfirmation
+          colors={colors} web={web} item={deleting} pending={busy === 'delete'} error={deleteError}
+          current={currentDelete ?? (error ? undefined : null)}
+          onClose={() => closeDelete(deleting.id)} onDelete={() => deleteTask(deleting)}
+          chatAction={chatAction}
+        />
+      )}
       {upload && (
-        <Modal title={`Attach screenshot to #${upload.number}`} open onOpenChange={(open) => !open && setUpload(undefined)}>
+        <Modal title={`Attach screenshot to #${upload.number}`} open onOpenChange={(open) => {
+          if (!open) { setUpload(undefined); setFocus({ kind: 'row', id: upload.itemId }); }
+        }}>
           <Modal.Content>
-            <Copy colors={colors}>Choose a PNG or JPEG in your browser. This link is valid for five minutes and accepts one screenshot.</Copy>
-            {upload.url.startsWith('http:') && (
-              <Copy colors={colors} muted>Open this link in a browser running on {host.label}.</Copy>
-            )}
+            <Copy colors={colors}>Choose a PNG or JPEG in your browser. The link is valid for five minutes and accepts one screenshot.</Copy>
+            {upload.url.startsWith('http:') && <Copy colors={colors} muted>Open the link in a browser running on {host.label}.</Copy>}
             <ExternalLink href={upload.url} accessibilityLabel="Open screenshot uploader">
               <View style={{ minHeight: 44, justifyContent: 'center' }}>
                 <Text style={{ color: colors.accent, fontWeight: '600' }}>Open screenshot uploader</Text>
@@ -217,54 +337,126 @@ export function WorkspaceInbox({
           </Modal.Content>
         </Modal>
       )}
-    </>
+    </Page>
   );
 }
 
-function Item({
-  item, colors, checked, toggle, attach, disabled, batchDetail,
+function InboxRow({
+  item, colors, web, checked, toggle, expanded, toggleMenu, menuButtonRef, firstMenuActionRef, disabled, edit, deleteTask, attach,
 }: {
   item: InboxItemView;
   colors: Colors;
-  checked?: boolean;
-  toggle?: () => void;
+  web: boolean;
+  checked: boolean;
+  toggle: () => void;
+  expanded: boolean;
+  toggleMenu: () => void;
+  menuButtonRef: Ref<View>;
+  firstMenuActionRef: Ref<View>;
+  disabled: boolean;
+  edit: () => void;
+  deleteTask: () => void;
   attach?: () => void;
-  disabled?: boolean;
-  batchDetail?: string | undefined;
 }) {
-  const showStatus = item.status !== 'inbox';
-  const tone = item.status === 'blocked' ? colors.statusWarning : colors.foregroundMuted;
-  return (
-    <View style={{ borderColor: colors.border, borderWidth: 1, borderRadius: 9, padding: 12, gap: 6, backgroundColor: colors.surface1 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
-        {checked !== undefined && (
-          <Pressable
-            accessibilityRole="checkbox"
-            accessibilityLabel={`Include bug ${item.number} in the batch`}
-            accessibilityState={{ checked, disabled: !toggle }}
-            onPress={toggle}
-            disabled={!toggle}
-            style={{ width: 44, height: 44, justifyContent: 'center', alignItems: 'center', marginLeft: -8, marginTop: -8 }}
-          >
-            <Icon name={checked ? 'SquareCheck' : 'Square'} color={checked ? colors.accent : colors.foregroundMuted} size={20} />
-          </Pressable>
-        )}
-        <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <Copy colors={colors} heading>#{item.number}</Copy>
-            {showStatus && <Text style={{ color: tone, fontSize: 13 }}>{statusLabel[item.status]}</Text>}
-          </View>
+  const row = (
+    <View style={{ borderTopColor: colors.border, borderTopWidth: 1, paddingVertical: 5 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 4 }}>
+        <IconAction
+          colors={colors} icon={checked ? 'SquareCheck' : 'Square'} label={`Include task #${item.number} in the batch`}
+          checked={checked} compact={web} disabled={disabled} onPress={toggle}
+        />
+        <View style={{ flex: 1, minWidth: 0, gap: 1, paddingVertical: 4 }}>
           <Copy colors={colors}>{item.text}</Copy>
-          {item.detail !== '' && item.detail !== batchDetail && <Copy colors={colors} muted>{item.detail}</Copy>}
-          {item.images > 0 && (
-            <Copy colors={colors} muted>{item.images} {item.images === 1 ? 'screenshot' : 'screenshots'}</Copy>
+          <TaskMeta item={item} colors={colors} />
+        </View>
+        <IconAction
+          colors={colors} icon="Ellipsis" label={`Actions for task #${item.number}`} expanded={expanded}
+          focusRef={menuButtonRef} compact={web} disabled={disabled} onPress={toggleMenu}
+        />
+      </View>
+      {expanded && (
+        <View style={{ alignSelf: 'flex-end', backgroundColor: colors.surface1, borderRadius: 7, padding: 3 }}>
+          <Action colors={colors} label="Edit task" icon="Pencil" compact={web} subtle focusRef={firstMenuActionRef} onPress={edit} />
+          {attach && <Action colors={colors} label="Attach screenshot in browser" icon="ImagePlus" compact={web} subtle onPress={attach} />}
+          <Action colors={colors} label="Delete task" icon="Trash2" compact={web} subtle danger onPress={deleteTask} />
+        </View>
+      )}
+    </View>
+  );
+  return web ? (
+    <div style={{ minWidth: 0 }} onKeyDown={(event) => {
+      if (expanded && event.key === 'Escape') { event.stopPropagation(); toggleMenu(); }
+    }}>{row}</div>
+  ) : row;
+}
+
+function TaskMeta({ item, colors }: { item: InboxItemView; colors: Colors }) {
+  return (
+    <Copy colors={colors} muted size={12}>
+      #{item.number}{item.images > 0 ? ` · ${item.images} ${item.images === 1 ? 'screenshot' : 'screenshots'}` : ''}
+    </Copy>
+  );
+}
+
+function HistoryRow({ item, colors, batchDetail }: { item: InboxItemView; colors: Colors; batchDetail?: string }) {
+  return (
+    <View style={{ borderTopWidth: 1, borderTopColor: colors.border, paddingVertical: 8, gap: 3 }}>
+      <Copy colors={colors}>{item.text}</Copy>
+      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 7 }}>
+        <TaskMeta item={item} colors={colors} />
+        <Text style={{ color: item.status === 'blocked' ? colors.statusWarning : item.status === 'completed' ? colors.statusSuccess : colors.foregroundMuted, fontSize: 12 }}>
+          {statusLabel[item.status]}
+        </Text>
+      </View>
+      {item.detail && item.detail !== batchDetail && <Copy colors={colors} muted size={13}>{item.detail}</Copy>}
+      <VerifiedPr colors={colors} url={item.prUrl} />
+    </View>
+  );
+}
+
+function DeleteConfirmation({
+  colors, web, item, current, pending, error, onClose, onDelete, chatAction,
+}: {
+  colors: Colors;
+  web: boolean;
+  item: InboxItemView;
+  current: InboxItemView | null | undefined;
+  pending: boolean;
+  error: string | undefined;
+  onClose: () => void;
+  onDelete: () => void;
+  chatAction: (id?: string) => (() => void) | undefined;
+}) {
+  const claimed = current && current.status !== 'inbox' ? current : item.status !== 'inbox' ? item : undefined;
+  const unavailable = Boolean(claimed) || current === null;
+  const conflict = claimed ? 'This task has already been sent to chat.' : current === null ? 'This task was already deleted.' : error;
+  const openChat = chatAction(claimed?.chatId);
+  const focusCancel = useCallback((button: View | null) => {
+    if (!button) return;
+    const frame = requestAnimationFrame(() => button.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  return (
+    <Modal title={`Delete task #${item.number}?`} open onOpenChange={(open) => !open && !pending && onClose()}>
+      <Modal.Content>
+        <Copy colors={colors}>{item.text}</Copy>
+        {conflict && <Copy colors={colors} error>{conflict}</Copy>}
+        {!unavailable && item.images > 0 && (
+          <Copy colors={colors} muted>{item.images === 1 ? 'Its screenshot will also be deleted.' : `Its ${item.images} screenshots will also be deleted.`}</Copy>
+        )}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          <Action
+            colors={colors} label={unavailable ? 'Close' : 'Cancel'} compact={web} onPress={onClose} disabled={pending}
+            focusRef={focusCancel}
+          />
+          {!unavailable && (
+            <Action colors={colors} label={pending ? 'Deleting…' : 'Delete task'} compact={web} danger disabled={pending} onPress={onDelete} />
           )}
-          <VerifiedPr colors={colors} url={item.prUrl} />
-          {attach && item.images < maxItemScreenshots && (
-            <Action colors={colors} label="Attach screenshot" icon="ImagePlus" onPress={attach} disabled={Boolean(disabled)} />
+          {openChat && (
+            <Action colors={colors} label="Open chat" compact={web} onPress={() => { onClose(); openChat(); }} />
           )}
         </View>
-      </View>
-    </View>
+      </Modal.Content>
+    </Modal>
   );
 }

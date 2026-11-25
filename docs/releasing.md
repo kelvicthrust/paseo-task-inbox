@@ -7,8 +7,12 @@
 Install the candidate archive on an isolated daemon and use stock Paseo Desktop at the minimum version declared in `paseo-plugin.json`.
 
 1. Confirm the plugin reports **running**. Open **+ → Task Inbox** in the right-side Explorer and save a sample bug. Open the workspace Command Center and confirm **Open Task Inbox** focuses the existing Explorer tab.
-2. Set an available model in **Task Inbox agent**. From a workspace with a terminal selected, attach a sample screenshot and start the batch. Confirm the plugin creates one chat in the workspace, **Open chat** goes to that chat, and reloading preserves it.
-3. If the interface changed, replace `assets/task-inbox.png` with a screenshot from the stable app using sample data. Check the image for private information. Confirm the archive includes the manifest media and `OVERVIEW.md`.
+2. On Desktop and web, connect to a remote test daemon with the private screenshot address blank. Choose, paste, and drop sample images before adding a task. Remove one, retry an interrupted upload, and confirm the saved task has exactly the intended images. Edit its description and images, reload, then delete a second sample task and confirm its number is never reused.
+3. In narrow and wider Explorer panels, check light and dark themes, keyboard access to attachment and row actions, the footer while scrolling, and focus after saving or deleting. Start work from another client while editing and confirm the reserved task is preserved.
+4. Set an available model in **Task Inbox agent**. From a workspace with a terminal selected, attach a sample screenshot and start the batch. Check the dispatched description and image order and bytes against the saved report. Confirm the plugin creates one chat in the workspace, **Open chat** goes to that chat, and reloading preserves it.
+5. If the interface changed, replace `assets/task-inbox.png` with a screenshot from the stable app using sample data. Check the image for private information. Confirm the archive includes the manifest media and `OVERVIEW.md`.
+
+The capture-first build upgrades the private inbox database from schema 1 to schema 2 on first open. Verify an upgrade with pre-existing reports, screenshots and an active batch in an isolated copy. For a rollback rehearsal, stop the daemon and back up its private inbox database before the upgrade. An older plugin requires that pre-upgrade database.
 
 ## Publish with GitHub Actions
 

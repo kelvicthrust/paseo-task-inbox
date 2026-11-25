@@ -13,6 +13,8 @@ export interface Candidate extends PullRequestClaim {
 export interface Item {
   id: string;
   number: number;
+  version?: number;
+  chatId?: string;
   text: string;
   status: ItemStatus;
   detail: string;
@@ -56,7 +58,23 @@ export interface WorkspaceState {
   items: Item[];
   batch: Batch | null;
   annotations: Annotation[];
+  nextItemNumber: number;
 }
+
+export interface StoredImage {
+  id: string;
+  mimeType: ImageType;
+  bytes: Uint8Array;
+}
+
+interface SaveReceipt {
+  requestHash: string;
+  itemId: string;
+  number: number;
+  version: number;
+}
+
+const imageId = "coalesce(image_id, 'legacy-' || ordinal)";
 
 export async function openStorage(directory: string) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -77,11 +95,11 @@ export async function openStorage(directory: string) {
   }
   const database = new DatabaseSync(path);
   try {
+    database.exec("PRAGMA busy_timeout = 5000");
+    database.exec("BEGIN IMMEDIATE");
     const { user_version } = database.prepare("PRAGMA user_version").get() as { user_version: number };
-    if (user_version > 1) throw new Error("The inbox database needs a newer plugin version.");
+    if (user_version > 2) throw new Error("The inbox database needs a newer plugin version.");
     database.exec(`
-      PRAGMA busy_timeout = 5000;
-      BEGIN IMMEDIATE;
       CREATE TABLE IF NOT EXISTS workspaces (
         id TEXT PRIMARY KEY,
         data TEXT NOT NULL,
@@ -95,9 +113,23 @@ export async function openStorage(directory: string) {
         bytes BLOB NOT NULL,
         PRIMARY KEY (workspace_id, item_id, ordinal)
       ) STRICT;
-      PRAGMA user_version = 1;
-      COMMIT;
     `);
+    if (user_version < 2) {
+      database.exec(`
+        ALTER TABLE images ADD COLUMN image_id TEXT;
+        CREATE TABLE save_receipts (
+          workspace_id TEXT NOT NULL,
+          operation_id TEXT NOT NULL,
+          request_hash TEXT NOT NULL,
+          item_id TEXT NOT NULL,
+          number INTEGER NOT NULL,
+          version INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, operation_id)
+        ) STRICT;
+        PRAGMA user_version = 2;
+      `);
+    }
+    database.exec("COMMIT");
   } catch (error) {
     database.close();
     throw error;
@@ -107,9 +139,28 @@ export async function openStorage(directory: string) {
 
 export function readState(database: DatabaseSync, workspaceId: string): WorkspaceState {
   const row = database.prepare("SELECT data FROM workspaces WHERE id = ?").get(workspaceId);
-  const state = row ? JSON.parse(row.data as string) as WorkspaceState : { items: [], batch: null, annotations: [] };
+  const state = row ? JSON.parse(row.data as string) as WorkspaceState : {
+    items: [], batch: null, annotations: [], nextItemNumber: 1,
+  };
   state.annotations ??= [];
+  state.nextItemNumber ??= state.items.reduce((next, item) => Math.max(next, item.number + 1), 1);
   return state;
+}
+
+export function readSnapshot<T>(database: DatabaseSync, read: () => T): T {
+  return transaction(database, "BEGIN", read);
+}
+
+function transaction<T>(database: DatabaseSync, begin: "BEGIN" | "BEGIN IMMEDIATE", run: () => T): T {
+  database.exec(begin);
+  try {
+    const result = run();
+    database.exec("COMMIT");
+    return result;
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function editState<T>(
@@ -117,8 +168,7 @@ export function editState<T>(
   workspaceId: string,
   edit: (state: WorkspaceState) => T,
 ): T {
-  database.exec("BEGIN IMMEDIATE");
-  try {
+  return transaction(database, "BEGIN IMMEDIATE", () => {
     const state = readState(database, workspaceId);
     const result = edit(state);
     database.prepare(`
@@ -127,12 +177,8 @@ export function editState<T>(
     `).run(workspaceId, JSON.stringify(state), Number(
       state.annotations.length > 0 || (state.batch !== null && state.batch.phase !== "finished"),
     ));
-    database.exec("COMMIT");
     return result;
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export function activeWorkspaces(database: DatabaseSync): string[] {
@@ -148,19 +194,65 @@ export function imageSize(database: DatabaseSync, workspaceId: string, itemId: s
 }
 
 export function readImages(database: DatabaseSync, workspaceId: string, itemId: string) {
-  return database.prepare(`
-    SELECT mime_type, bytes FROM images WHERE workspace_id = ? AND item_id = ? ORDER BY ordinal
-  `).all(workspaceId, itemId).map((row) => ({
-    data: Buffer.from(row.bytes as Uint8Array).toString("base64"),
-    mimeType: row.mime_type as ImageType,
+  return readStoredImages(database, workspaceId, itemId).map(({ bytes, mimeType }) => ({
+    data: Buffer.from(bytes).toString("base64"),
+    mimeType,
   }));
 }
 
-export function insertImage(
-  database: DatabaseSync, workspaceId: string, item: Item, mimeType: ImageType, bytes: Buffer,
-) {
+export function readStoredImages(database: DatabaseSync, workspaceId: string, itemId: string): StoredImage[] {
+  return database.prepare(`
+    SELECT ${imageId} AS id, mime_type, bytes
+    FROM images WHERE workspace_id = ? AND item_id = ? ORDER BY ordinal
+  `).all(workspaceId, itemId).map((row) => ({
+    id: row.id as string,
+    mimeType: row.mime_type as ImageType,
+    bytes: row.bytes as Uint8Array,
+  }));
+}
+
+export function readImageMetadata(database: DatabaseSync, workspaceId: string, itemId: string) {
+  return database.prepare(`
+    SELECT ${imageId} AS id, mime_type, length(bytes) AS size
+    FROM images WHERE workspace_id = ? AND item_id = ? ORDER BY ordinal
+  `).all(workspaceId, itemId).map((row) => ({
+    id: row.id as string,
+    mimeType: row.mime_type as ImageType,
+    size: row.size as number,
+  }));
+}
+
+export function readImageChunk(
+  database: DatabaseSync, workspaceId: string, itemId: string, id: string, offset: number, length: number,
+): Uint8Array | undefined {
+  const row = database.prepare(`
+    SELECT substr(bytes, ?, ?) AS bytes FROM images
+    WHERE workspace_id = ? AND item_id = ? AND ${imageId} = ? AND length(bytes) > ?
+  `).get(offset + 1, length, workspaceId, itemId, id, offset);
+  return row?.bytes as Uint8Array | undefined;
+}
+
+export function removeImages(database: DatabaseSync, workspaceId: string, itemId: string) {
+  database.prepare("DELETE FROM images WHERE workspace_id = ? AND item_id = ?").run(workspaceId, itemId);
+}
+
+export function insertImage(database: DatabaseSync, workspaceId: string, item: Item, image: StoredImage) {
   database.prepare(`
-    INSERT INTO images (workspace_id, item_id, ordinal, mime_type, bytes) VALUES(?, ?, ?, ?, ?)
-  `).run(workspaceId, item.id, item.images + 1, mimeType, bytes);
+    INSERT INTO images (workspace_id, item_id, ordinal, mime_type, bytes, image_id) VALUES(?, ?, ?, ?, ?, ?)
+  `).run(workspaceId, item.id, item.images + 1, image.mimeType, image.bytes, image.id);
   item.images += 1;
+}
+
+export function readSaveReceipt(database: DatabaseSync, workspaceId: string, operationId: string) {
+  return database.prepare(`
+    SELECT request_hash AS requestHash, item_id AS itemId, number, version
+    FROM save_receipts WHERE workspace_id = ? AND operation_id = ?
+  `).get(workspaceId, operationId) as SaveReceipt | undefined;
+}
+
+export function insertSaveReceipt(database: DatabaseSync, workspaceId: string, operationId: string, receipt: SaveReceipt) {
+  database.prepare(`
+    INSERT INTO save_receipts (workspace_id, operation_id, request_hash, item_id, number, version)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(workspaceId, operationId, receipt.requestHash, receipt.itemId, receipt.number, receipt.version);
 }
