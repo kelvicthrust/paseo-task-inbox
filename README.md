@@ -14,6 +14,8 @@ For dispatch and verification, use a workspace with a GitHub `origin`, Codex or 
 
 In Paseo, select that host and turn on **Enable plugins** under **Settings → Plugins**. Paseo plugins are trusted code and run with the daemon user's file and process access. [Paseo plugin setup](https://paseo.sh/docs/plugins)
 
+To attach screenshots before submitting or to edit and delete waiting tasks, [install from source](#install-from-source). If you install version 0.2.0, save the task first, then choose **Attach screenshot**. [Version 0.2.0 instructions](https://github.com/kelvicthrust/paseo-task-inbox/blob/v0.2.0/README.md#capture-and-send-bugs)
+
 ### Install from the Paseo catalog
 
 Install the catalog-approved version with npm available on the daemon host. [Task Inbox in the Paseo catalog](https://paseo.sh/plugins/kelvicthrust/task-inbox)
@@ -51,10 +53,12 @@ Before you send your first batch, go to **Settings → Plugins → Task Inbox**.
 
 ## Capture and send bugs
 
-1. In the workspace inbox, describe what went wrong. On Desktop or web, choose **Attach**, paste a screenshot into the composer, or drop an image onto it. Check the preview and remove any unwanted images before selecting **Add task**.
-2. To correct a waiting task, open its **⋯** menu and choose **Edit task**. Update the description or screenshots and save. Choose **Delete task** and confirm to remove the report and its images. Once a batch claims a task, its contents are fixed.
+1. Describe what went wrong. On Desktop or web, add a PNG or JPEG with **Attach**, paste it into the composer, or drop it there. Check the preview, then select **Add task** when the uploads finish.
+2. Open a waiting task’s **⋯** menu to make a correction. Choose **Edit task** to update the description or screenshots, then select **Save changes** or **Cancel**. To remove the task and its images, choose **Delete task** from the menu and confirm. Once a batch claims a task, its contents are fixed.
 3. Select the tasks to fix, check the model in the footer, and start the batch. Task Inbox creates a visible chat in that workspace, even when the main pane shows a terminal.
 4. Follow the batch in Task Inbox or select **Open chat**. You can keep capturing reports while the batch runs. Switching tabs or reloading returns you to the same batch and chat.
+
+If a screenshot upload fails, select **Retry upload** beside the image or remove it to continue. If Task Inbox can’t confirm a save, select **Retry save** to finish the same request without creating a duplicate.
 
 All chats in the workspace share one inbox. Task Inbox allows one active batch per workspace, with up to 20 bugs and 24 MiB of images per batch. Each bug can have up to four images of 8 MiB each.
 
