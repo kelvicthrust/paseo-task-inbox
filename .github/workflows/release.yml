@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
     paths: [package.json]
+  pull_request:
+    branches: [main]
+    paths: [package.json]
   workflow_dispatch:
     inputs:
       finalize_local_publish:
@@ -28,7 +31,7 @@ env:
 jobs:
   version:
     name: Check release version
-    if: github.event_name == 'workflow_dispatch' || (github.repository == 'kelvicthrust/paseo-task-inbox' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || (github.repository == 'kelvicthrust/paseo-task-inbox' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -47,31 +50,34 @@ jobs:
       - name: Check release version
         id: version
         env:
-          BEFORE: ${{ github.event.before }}
+          BEFORE: ${{ github.event.before || github.event.pull_request.base.sha }}
           FINALIZE_LOCAL: ${{ inputs.finalize_local_publish }}
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
             previous=$(git show "$BEFORE:package.json" | jq -er '.version')
             version=$(node scripts/check-release-version.ts "$previous")
             if [[ -z "$version" ]]; then
               echo "Package version did not change."
               exit 0
             fi
+          elif [[ "$FINALIZE_LOCAL" == true ]]; then
+            version=$(node scripts/check-release-version.ts --finalize)
+          else
+            version=$(node scripts/check-release-version.ts)
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             tag="refs/tags/v$version"
             if git show-ref --verify --quiet "$tag" &&
               [[ "$(git rev-parse "$tag^{commit}")" != "$GITHUB_SHA" ]]; then
               echo "Tag v$version already points to another commit." >&2
               exit 1
             fi
-          else
-            version=$(node scripts/check-release-version.ts)
-            if [[ "$FINALIZE_LOCAL" == true ]]; then
-              if [[ "$GITHUB_REPOSITORY" != kelvicthrust/paseo-task-inbox ]] ||
-                 [[ "$GITHUB_REF" != refs/heads/main && "$GITHUB_REF" != "refs/tags/v$version" ]] ||
-                 ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
-                echo "Finalize from the source repository's main branch or its matching release tag." >&2
-                exit 1
-              fi
+          elif [[ "$FINALIZE_LOCAL" == true ]]; then
+            if [[ "$GITHUB_REPOSITORY" != kelvicthrust/paseo-task-inbox ]] ||
+               [[ "$GITHUB_REF" != refs/heads/main && "$GITHUB_REF" != "refs/tags/v$version" ]] ||
+               ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+              echo "Finalize from the source repository's main branch or its matching release tag." >&2
+              exit 1
             fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -79,7 +85,7 @@ jobs:
   build:
     name: Build and test release package
     needs: version
-    if: needs.version.outputs.version != ''
+    if: github.event_name != 'pull_request' && needs.version.outputs.version != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -109,8 +115,16 @@ jobs:
       - name: Gather release assets
         env:
           VERSION: ${{ needs.version.outputs.version }}
+          FINALIZE_LOCAL: ${{ inputs.finalize_local_publish }}
         working-directory: dist/release
-        run: sha256sum "kelvicthrust-paseo-task-inbox-$VERSION.tgz" > SHA256SUMS
+        run: |
+          assets=("kelvicthrust-paseo-task-inbox-$VERSION.tgz")
+          if [[ "$GITHUB_EVENT_NAME" == push || "$FINALIZE_LOCAL" == true ]]; then
+            notes="v$VERSION.md"
+            cp "../../docs/releases/$notes" "$notes"
+            assets+=("$notes")
+          fi
+          sha256sum "${assets[@]}" > SHA256SUMS
       - name: Upload verified release assets
         id: upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -118,6 +132,7 @@ jobs:
           name: paseo-task-inbox-${{ needs.version.outputs.version }}-${{ github.run_attempt }}
           path: |
             dist/release/kelvicthrust-paseo-task-inbox-${{ needs.version.outputs.version }}.tgz
+            dist/release/v${{ needs.version.outputs.version }}.md
             dist/release/SHA256SUMS
           if-no-files-found: error
           compression-level: 0
@@ -150,7 +165,7 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          (cd dist/release && cmp SHA256SUMS <(sha256sum "kelvicthrust-paseo-task-inbox-$VERSION.tgz"))
+          (cd dist/release && cmp SHA256SUMS <(sha256sum "kelvicthrust-paseo-task-inbox-$VERSION.tgz" "v$VERSION.md"))
           node scripts/publish-release-npm.ts "$VERSION" dist/release
 
   verify_local:
@@ -177,7 +192,7 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          (cd dist/release && cmp SHA256SUMS <(sha256sum "kelvicthrust-paseo-task-inbox-$VERSION.tgz"))
+          (cd dist/release && cmp SHA256SUMS <(sha256sum "kelvicthrust-paseo-task-inbox-$VERSION.tgz" "v$VERSION.md"))
           node scripts/publish-release-npm.ts "$VERSION" dist/release --verify-only
 
   github:
@@ -206,7 +221,8 @@ jobs:
         working-directory: release
         run: |
           archive="kelvicthrust-paseo-task-inbox-$VERSION.tgz"
-          cmp SHA256SUMS <(sha256sum "$archive")
+          notes="v$VERSION.md"
+          cmp SHA256SUMS <(sha256sum "$archive" "$notes")
           tag="v$VERSION"
           ref="refs/tags/$tag"
 
@@ -235,11 +251,11 @@ jobs:
             # The release list can lag behind draft creation. Use the response's ID.
             release=$(gh api --method POST "repos/$GH_REPO/releases" \
               -f tag_name="$tag" -f target_commitish="$BUILT_COMMIT" \
-              -f name="Paseo Task Inbox $tag" -F draft=true -F generate_release_notes=true)
+              -f name="Paseo Task Inbox $tag" -F draft=true)
           fi
           id=$(jq -er --arg tag "$tag" 'select(.tag_name == $tag and .prerelease == false) | .id | numbers' <<< "$release")
           draft=$(jq -r '.draft' <<< "$release")
-          expected=$(sha256sum "$archive" SHA256SUMS |
+          expected=$(sha256sum "$archive" "$notes" SHA256SUMS |
             jq -Rcs 'split("\n") | map(select(length > 0) | split("  ") |
               {name: .[1], digest: ("sha256:" + .[0]), state: "uploaded"}) | sort_by(.name)')
           release_assets() {
@@ -271,7 +287,7 @@ jobs:
               exit 1
             fi
             gh api --method PATCH "repos/$GH_REPO/releases/$id" \
-              -F draft=false -f make_latest=legacy --jq '.html_url'
+              -F "body=@$notes" -F draft=false -f make_latest=legacy --jq '.html_url'
           else
             jq -r '.html_url' <<< "$release"
           fi
