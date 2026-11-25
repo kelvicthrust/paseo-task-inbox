@@ -15,6 +15,7 @@ import {
   type InboxItemView,
 } from '../shared/rpc.ts';
 import { Action, Copy, IconAction, Page, VerifiedPr, statusLabel, type Colors } from './controls.tsx';
+import { useKeyboardNavigation } from './browser-capture.tsx';
 import { TaskEditor, type ReadyInboxItem } from './editor.tsx';
 import { errorMessage, useInboxQuery } from './query.ts';
 
@@ -52,6 +53,7 @@ export function WorkspaceInbox({
   const rowButtons = useRef(new Map<string, View>());
   const colors = theme.colors;
   const web = layout.platform === 'web';
+  const keyboardNavigation = useKeyboardNavigation(web);
 
   useEffect(() => {
     if (!focus || busy) return;
@@ -237,6 +239,7 @@ export function WorkspaceInbox({
       <View style={editing ? { display: 'none' } : undefined}>
         <TaskEditor
           workspaceId={workspaceId} colors={colors} web={web} disabled={Boolean(busy)} inputRef={newInput}
+          keyboardNavigation={keyboardNavigation}
           onSaved={() => { void refresh(); setFocus({ kind: 'new' }); }}
         />
       </View>
@@ -245,6 +248,7 @@ export function WorkspaceInbox({
           key={editing.item.id}
           workspaceId={workspaceId} colors={colors} web={web} disabled={Boolean(busy)}
           initial={editing} currentItem={currentEdit ?? (error ? undefined : null)} inputRef={editInput}
+          keyboardNavigation={keyboardNavigation}
           onClose={closeEditor}
           onSaved={() => { closeEditor(); void refresh(); }}
           chatAction={chatAction}
