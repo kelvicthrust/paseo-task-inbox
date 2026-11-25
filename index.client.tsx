@@ -6,7 +6,7 @@ import {
   type PluginWorkspaceRowBadgeItemProps,
 } from '@getpaseo/plugin/client';
 import { WorkspaceRowBadge } from '@getpaseo/plugin/client/ui';
-import { Copy, Page, statusLabel } from './client/controls.tsx';
+import { statusLabel } from './client/controls.tsx';
 import { WorkspaceInbox } from './client/inbox.tsx';
 import { BatchOutcome } from './client/outcome.tsx';
 import { useInboxQuery } from './client/query.ts';
@@ -24,10 +24,7 @@ function InboxPanel(props: PluginWorkspacePanelProps) {
     (workspace) => workspace.title ?? workspace.name,
   );
   return (
-    <Page {...props}>
-      {workspaceName && <Copy colors={props.theme.colors} heading size={20}>{workspaceName}</Copy>}
-      <WorkspaceInbox key={JSON.stringify([props.host.id, props.workspaceId])} {...props} />
-    </Page>
+    <WorkspaceInbox key={JSON.stringify([props.host.id, props.workspaceId])} workspaceName={workspaceName ?? undefined} {...props} />
   );
 }
 

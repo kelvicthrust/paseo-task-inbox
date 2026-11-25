@@ -3,16 +3,17 @@ import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { BatchOutcome } from "../shared/outcome.ts";
-import type { ImageType, InboxAgent, InboxHost, InboxWorkspace, TimelineCursor, TimelinePage } from "./inbox-types.ts";
+import { maxBatchItems } from "../shared/rpc.ts";
+import { createCapture, itemView } from "./capture.ts";
+import { createImageStaging } from "./image-staging.ts";
+import type { InboxAgent, InboxHost, InboxWorkspace, TimelineCursor, TimelinePage } from "./inbox-types.ts";
 import { createPaseoHost } from "./paseo.ts";
 import { flushAssistant, formatPrompt, readTimeline } from "./reporting.ts";
-import { activeWorkspaces, editState, imageSize, insertImage, openStorage, readImages, readState } from "./storage.ts";
-import type { Annotation, Batch, Item, WorkspaceState } from "./storage.ts";
+import { activeWorkspaces, editState, imageSize, openStorage, readImages, readState } from "./storage.ts";
+import type { Annotation, Batch, WorkspaceState } from "./storage.ts";
 
 export type { InboxAgent, InboxHost, TimelineEntry } from "./inbox-types.ts";
 
-const maxItems = 20;
-const maxImageBytes = 8 * 1024 * 1024;
 const maxBatchImageBytes = 24 * 1024 * 1024;
 const retryDelay = 15_000;
 const reconcileGrace = 60_000;
@@ -100,19 +101,9 @@ function waitingFor(agent: InboxAgent): string | null {
   return null;
 }
 
-function validImage(mimeType: ImageType, bytes: Buffer) {
-  if (mimeType === "image/png") {
-    return bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  }
-  if (mimeType === "image/jpeg") {
-    return bytes.length >= 5 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 &&
-      bytes.at(-2) === 255 && bytes.at(-1) === 217;
-  }
-  return false;
-}
-
 export async function createInboxService(host: InboxHost, dataDir: string, now = Date.now) {
   const database = await openStorage(dataDir);
+  const staging = createImageStaging(now);
   let ticking: Promise<void> | null = null;
   let closing: Promise<void> | null = null;
   const getState = (workspaceId: string) => readState(database, workspaceId);
@@ -127,7 +118,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
     agentId: string; detail: string; newChat?: Batch["newChat"];
   }) {
     const selection = new Set(itemIds);
-    if (selection.size !== itemIds.length || selection.size === 0 || selection.size > maxItems) {
+    if (selection.size !== itemIds.length || selection.size === 0 || selection.size > maxBatchItems) {
       throw new Error("Select between 1 and 20 distinct bugs.");
     }
     const repository = await host.repository(workspace);
@@ -138,6 +129,11 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
       if (items.length !== selection.size) throw new Error("Select bugs from this workspace inbox.");
       const imageBytes = items.reduce((total, item) => total + imageSize(database, workspace.id, item.id), 0);
       if (imageBytes > maxBatchImageBytes) throw new Error("Select a batch with up to 24 MiB of images.");
+      if (state.batch) {
+        for (const item of selectedItems(state, state.batch)) {
+          if (item.status !== "inbox") item.chatId ??= state.batch.agentId;
+        }
+      }
       const id = randomUUID();
       state.batch = {
         ...destination, id, repository, directory: workspace.directory, itemIds: items.map(({ id }) => id),
@@ -147,6 +143,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
       for (const item of items) {
         item.status = "queued";
         item.detail = destination.detail;
+        item.chatId = destination.agentId;
       }
     });
   }
@@ -333,6 +330,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
         for (const item of selectedItems(state, current)) {
           item.status = "inbox";
           item.detail = "";
+          delete item.chatId;
         }
         current.phase = "finished";
         current.status = "blocked";
@@ -510,6 +508,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
   }
 
   return {
+    ...createCapture(database, getWorkspace, staging),
     async workspaces() {
       return (await host.workspaces()).map(({ id, label }) => ({ id, label }));
     },
@@ -523,36 +522,12 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
         agents,
         agentId: batch && agents.some(({ id }) => id === batch.agentId) ? batch.agentId : null,
         canStart: !batch || batch.phase === "finished",
-        items: items.map(({ id, number, text, status, detail, images, prUrl }) => ({
-          id, number, text, status, detail, images, ...(prUrl ? { prUrl } : {}),
-        })),
+        items: items.map((item) => itemView(item, batch)),
         batch: batch && { id: batch.id, agentId: batch.agentId, status: batch.status, detail: batch.detail },
       };
     },
     async badge(workspaceId: string) {
       return summarize(getState(workspaceId));
-    },
-    async add(workspaceId: string, text: string) {
-      const cleaned = text.trim();
-      if (!cleaned || cleaned.length > 8000) throw new Error("Enter between 1 and 8,000 characters.");
-      await getWorkspace(workspaceId);
-      editState(database, workspaceId, (state) => {
-        state.items.push({
-          id: randomUUID(), number: state.items.length + 1, text: cleaned, status: "inbox", detail: "", images: 0,
-        });
-      });
-    },
-    async attach(workspaceId: string, itemId: string, mimeType: ImageType, bytes: Buffer) {
-      if (bytes.length > maxImageBytes || !validImage(mimeType, bytes)) {
-        throw new Error("Choose a PNG or JPEG image up to 8 MiB.");
-      }
-      await getWorkspace(workspaceId);
-      editState(database, workspaceId, (state) => {
-        const item = state.items.find(({ id }) => id === itemId);
-        if (!item || item.status !== "inbox") throw new Error("Images can only be added to bugs in this workspace inbox.");
-        if (item.images >= 4) throw new Error("A bug can have up to four images.");
-        insertImage(database, workspaceId, item, mimeType, bytes);
-      });
     },
     async start(workspaceId: string, agentId: string, itemIds: string[]) {
       const workspace = await getWorkspace(workspaceId);
@@ -579,6 +554,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
     },
     tick() {
       if (closing) return closing;
+      staging.expire();
       if (!ticking) {
         ticking = (async () => {
           for (const workspaceId of activeWorkspaces(database)) {
@@ -608,6 +584,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
         try {
           await ticking;
         } finally {
+          staging.clear();
           database.close();
         }
       })();
