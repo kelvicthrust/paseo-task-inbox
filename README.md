@@ -4,7 +4,7 @@
 
 Capture bugs and screenshots while you test in Paseo. Start a batch from the workspace’s right-side Explorer and Task Inbox opens a Codex or Claude Code chat to work on it. Keep capturing bugs while the agent works, and find verified fixes with links to their pull requests.
 
-![The Task Inbox composer with a screenshot attached, three waiting tasks and the batch footer](assets/task-inbox.png)
+![Task Inbox in Explorer with a screenshot attached to the draft and a floating Edit task and Delete task menu](assets/task-inbox.png)
 
 ## Get started
 
@@ -14,7 +14,7 @@ For dispatch and verification, use a workspace with a GitHub `origin`, Codex or 
 
 In Paseo, select that host and turn on **Enable plugins** under **Settings → Plugins**. Paseo plugins are trusted code and run with the daemon user's file and process access. [Paseo plugin setup](https://paseo.sh/docs/plugins)
 
-In 1.0.0 you can edit or delete waiting tasks and, on Desktop and web, attach screenshots before submitting. If the catalog still offers 0.2.0, use the versioned npm command below to install 1.0.0. On 0.2.0, save the task first, then choose **Attach screenshot**. [Version 0.2.0 instructions](https://github.com/kelvicthrust/paseo-task-inbox/blob/v0.2.0/README.md#capture-and-send-bugs)
+Starting in 1.0.0, you can edit or delete waiting tasks and, on Desktop and web, attach screenshots before submitting. If the catalog still offers 0.2.0, use the versioned npm command below to install 1.0.1. On 0.2.0, save the task first, then choose **Attach screenshot**. [Version 0.2.0 instructions](https://github.com/kelvicthrust/paseo-task-inbox/blob/v0.2.0/README.md#capture-and-send-bugs)
 
 ### Install from the Paseo catalog
 
@@ -31,7 +31,7 @@ In the app, enter `kelvicthrust/task-inbox` as the source under **Settings → P
 Use a versioned npm source to test a particular release directly.
 
 ```sh
-paseo plugin install 'npm:@kelvicthrust/paseo-task-inbox@1.0.0'
+paseo plugin install 'npm:@kelvicthrust/paseo-task-inbox@1.0.1'
 ```
 
 ### Install from source
