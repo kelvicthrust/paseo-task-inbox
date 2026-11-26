@@ -1,7 +1,7 @@
 import { useRpc, useSettings, type PluginSurfaceProps } from '@getpaseo/plugin/client';
 import { ExternalLink, Modal } from '@getpaseo/plugin/client/ui';
 import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
-import { Text, View, type ScrollView, type TextInput } from 'react-native';
+import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent, type ScrollView, type TextInput } from 'react-native';
 import { taskInboxAgentSettings } from '../shared/agent.ts';
 import {
   deleteInboxItem,
@@ -20,7 +20,7 @@ import { TaskEditor, type ReadyInboxItem } from './editor.tsx';
 import { errorMessage, useInboxQuery } from './query.ts';
 
 type Operation = 'start' | 'edit' | 'delete' | 'attach';
-type FocusTarget = { kind: 'new' | 'edit' | 'menu' } | { kind: 'row'; id: string };
+type FocusTarget = { kind: 'new' | 'edit' } | { kind: 'row'; id: string };
 
 export function WorkspaceInbox({
   host, layout, theme, navigation, workspaceId, workspaceName,
@@ -38,7 +38,7 @@ export function WorkspaceInbox({
   const [busy, setBusy] = useState<Operation>();
   const [startError, setStartError] = useState<string>();
   const [rowError, setRowError] = useState<{ message: string; chatId?: string }>();
-  const [menu, setMenu] = useState<string>();
+  const [menu, setMenu] = useState<{ id: string; anchor: View }>();
   const [editing, setEditing] = useState<ReadyInboxItem>();
   const [deleting, setDeleting] = useState<InboxItemView>();
   const [deleteError, setDeleteError] = useState<string>();
@@ -49,7 +49,6 @@ export function WorkspaceInbox({
   const newInput = useRef<TextInput>(null);
   const editInput = useRef<TextInput>(null);
   const scroll = useRef<ScrollView>(null);
-  const menuFirst = useRef<View>(null);
   const rowButtons = useRef(new Map<string, View>());
   const colors = theme.colors;
   const web = layout.platform === 'web';
@@ -63,8 +62,6 @@ export function WorkspaceInbox({
       editInput.current?.focus();
     } else if (focus.kind === 'row') {
       (rowButtons.current.get(focus.id) ?? newInput.current)?.focus();
-    } else if (focus.kind === 'menu') {
-      menuFirst.current?.focus();
     } else {
       newInput.current?.focus();
     }
@@ -112,6 +109,7 @@ export function WorkspaceInbox({
     checkedIds.length > 0 && checkedIds.length <= maxBatchItems;
   const currentEdit = editing && data.items.find(({ id }) => id === editing.item.id);
   const currentDelete = deleting && data.items.find(({ id }) => id === deleting.id);
+  const menuItem = menu && inbox.find(({ id }) => id === menu.id);
 
   function chatAction(id?: string) {
     if (id && navigation && data?.agents.some((agent) => agent.id === id)) {
@@ -132,14 +130,15 @@ export function WorkspaceInbox({
     });
   }
 
+  function closeMenu(id: string) {
+    setMenu(undefined);
+    (rowButtons.current.get(id) ?? newInput.current)?.focus();
+  }
+
   function toggleMenu(id: string) {
-    if (menu === id) {
-      setMenu(undefined);
-      setFocus({ kind: 'row', id });
-    } else {
-      setMenu(id);
-      setFocus({ kind: 'menu' });
-    }
+    if (menu?.id === id) return closeMenu(id);
+    const anchor = rowButtons.current.get(id);
+    if (anchor) setMenu({ id, anchor });
   }
 
   function openEditor(item: InboxItemView) {
@@ -233,8 +232,16 @@ export function WorkspaceInbox({
     </>
   );
 
+  const taskMenu = menu && menuItem && (
+    <TaskMenu
+      key={menu.id} anchor={menu.anchor} colors={colors} web={web}
+      dismiss={() => closeMenu(menu.id)} edit={() => openEditor(menuItem)} deleteTask={() => confirmDelete(menuItem)}
+      attach={!web && menuItem.images < maxItemScreenshots ? () => attach(menuItem) : undefined}
+    />
+  );
+
   return (
-    <Page theme={theme} footer={batchFooter} scrollRef={scroll}>
+    <Page theme={theme} footer={batchFooter} overlay={taskMenu} scrollRef={scroll}>
       {workspaceName && <Copy colors={colors} heading size={19}>{workspaceName}</Copy>}
       <View style={editing ? { display: 'none' } : undefined}>
         <TaskEditor
@@ -289,17 +296,13 @@ export function WorkspaceInbox({
             web={web}
             checked={!excluded.has(item.id)}
             toggle={() => toggle(item.id)}
-            expanded={menu === item.id}
+            expanded={menuItem?.id === item.id}
             toggleMenu={() => toggleMenu(item.id)}
             menuButtonRef={(button) => {
               if (button) rowButtons.current.set(item.id, button);
               else rowButtons.current.delete(item.id);
             }}
-            firstMenuActionRef={menuFirst}
             disabled={Boolean(busy || editing || deleting)}
-            edit={() => openEditor(item)}
-            deleteTask={() => confirmDelete(item)}
-            attach={!web && item.images < maxItemScreenshots ? () => attach(item) : undefined}
           />
         ))}
       </View>
@@ -346,7 +349,7 @@ export function WorkspaceInbox({
 }
 
 function InboxRow({
-  item, colors, web, checked, toggle, expanded, toggleMenu, menuButtonRef, firstMenuActionRef, disabled, edit, deleteTask, attach,
+  item, colors, web, checked, toggle, expanded, toggleMenu, menuButtonRef, disabled,
 }: {
   item: InboxItemView;
   colors: Colors;
@@ -356,11 +359,7 @@ function InboxRow({
   expanded: boolean;
   toggleMenu: () => void;
   menuButtonRef: Ref<View>;
-  firstMenuActionRef: Ref<View>;
   disabled: boolean;
-  edit: () => void;
-  deleteTask: () => void;
-  attach?: () => void;
 }) {
   const row = (
     <View style={{ borderTopColor: colors.border, borderTopWidth: 1, paddingVertical: 5 }}>
@@ -378,13 +377,6 @@ function InboxRow({
           focusRef={menuButtonRef} compact={web} disabled={disabled} onPress={toggleMenu}
         />
       </View>
-      {expanded && (
-        <View style={{ alignSelf: 'flex-end', backgroundColor: colors.surface1, borderRadius: 7, padding: 3 }}>
-          <Action colors={colors} label="Edit task" icon="Pencil" compact={web} subtle focusRef={firstMenuActionRef} onPress={edit} />
-          {attach && <Action colors={colors} label="Attach screenshot in browser" icon="ImagePlus" compact={web} subtle onPress={attach} />}
-          <Action colors={colors} label="Delete task" icon="Trash2" compact={web} subtle danger onPress={deleteTask} />
-        </View>
-      )}
     </View>
   );
   return web ? (
@@ -392,6 +384,79 @@ function InboxRow({
       if (expanded && event.key === 'Escape') { event.stopPropagation(); toggleMenu(); }
     }}>{row}</div>
   ) : row;
+}
+
+function TaskMenu({ anchor, colors, web, dismiss, edit, deleteTask, attach }: {
+  anchor: View;
+  colors: Colors;
+  web: boolean;
+  dismiss: () => void;
+  edit: () => void;
+  deleteTask: () => void;
+  attach?: () => void;
+}) {
+  const layer = useRef<View>(null);
+  const firstAction = useRef<View>(null);
+  const lastAction = useRef<View>(null);
+  const [position, setPosition] = useState<{ top: number; bottom: number; right: number; width: number; height: number }>();
+  const [menuHeight, setMenuHeight] = useState<number>();
+  const visible = position !== undefined && menuHeight !== undefined;
+  const gap = 4;
+
+  function measureAnchor({ nativeEvent: { layout: { width, height } } }: LayoutChangeEvent) {
+    // The trigger is inside the scroller. Measure both views in window coordinates.
+    layer.current?.measureInWindow((layerX, layerY) => {
+      anchor.measureInWindow((x, y, anchorWidth, anchorHeight) => {
+        const top = y - layerY;
+        const right = Math.max(gap, layerX + width - x - anchorWidth);
+        setPosition({ top, bottom: top + anchorHeight, right, width, height });
+      });
+    });
+  }
+
+  useEffect(() => {
+    if (visible) firstAction.current?.focus();
+  }, [visible]);
+
+  let top = 0;
+  if (visible) {
+    const below = position.bottom + gap;
+    const preferred = below + menuHeight <= position.height ? below : position.top - gap - menuHeight;
+    top = Math.max(0, preferred);
+  }
+
+  const overlay = (
+    <View ref={layer} collapsable={false} onLayout={measureAnchor} style={[StyleSheet.absoluteFill, { zIndex: 1 }]}>
+      <Pressable accessible={false} focusable={false} onPress={dismiss} style={StyleSheet.absoluteFill} />
+      <View
+        onLayout={({ nativeEvent }) => setMenuHeight(nativeEvent.layout.height)}
+        pointerEvents={visible ? 'auto' : 'none'}
+        accessibilityElementsHidden={!visible}
+        importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
+        style={{
+          position: 'absolute', top, right: position?.right ?? gap,
+          maxWidth: position ? Math.max(0, position.width - position.right - gap) : '100%',
+          opacity: visible ? 1 : 0, backgroundColor: colors.surface1, borderRadius: 7,
+          borderColor: colors.border, borderWidth: 1, padding: 3,
+        }}
+      >
+        <Action colors={colors} label="Edit task" icon="Pencil" compact={web} subtle focusRef={firstAction} onPress={edit} />
+        {attach && <Action colors={colors} label="Attach screenshot in browser" icon="ImagePlus" compact={web} subtle onPress={attach} />}
+        <Action colors={colors} label="Delete task" icon="Trash2" compact={web} subtle danger focusRef={lastAction} onPress={deleteTask} />
+      </View>
+    </View>
+  );
+  return web ? (
+    <div style={{ display: 'contents' }} onKeyDown={(event) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        dismiss();
+      } else if (event.key === 'Tab' && Object.is(event.target, (event.shiftKey ? firstAction : lastAction).current)) {
+        // Let the browser continue tabbing from the trigger's place in the list.
+        dismiss();
+      }
+    }}>{overlay}</div>
+  ) : overlay;
 }
 
 function TaskMeta({ item, colors }: { item: InboxItemView; colors: Colors }) {

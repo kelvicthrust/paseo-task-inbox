@@ -14,8 +14,13 @@ export const statusLabel = {
 } as const;
 
 export function Page({
-  children, footer, theme, scrollRef,
-}: Pick<PluginSurfaceProps, 'theme'> & { children: ReactNode; footer?: ReactNode; scrollRef?: Ref<import('react-native').ScrollView> }) {
+  children, footer, overlay, theme, scrollRef,
+}: Pick<PluginSurfaceProps, 'theme'> & {
+  children: ReactNode;
+  footer?: ReactNode;
+  overlay?: ReactNode;
+  scrollRef?: Ref<import('react-native').ScrollView>;
+}) {
   return (
     <View style={{ flex: 1, minHeight: 0, backgroundColor: theme.colors.surface0 }}>
       <ScrollView
@@ -34,6 +39,7 @@ export function Page({
           <View style={{ width: '100%', maxWidth: 696, gap: 6 }}>{footer}</View>
         </View>
       )}
+      {overlay}
     </View>
   );
 }
