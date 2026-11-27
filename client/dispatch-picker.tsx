@@ -30,6 +30,7 @@ export function DispatchChoice({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? [label, detail, status].filter(Boolean).join(', ')}
       accessibilityState={{ disabled, expanded, selected: compact ? undefined : selected }}
+      {...(compact && expanded !== undefined ? { 'aria-expanded': expanded } : {})}
       {...(compact && selected !== undefined ? { 'aria-pressed': selected } : {})}
       disabled={disabled}
       onPress={onPress}
