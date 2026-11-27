@@ -20,11 +20,21 @@ Compare the release candidate with the last published tag. Include relevant chan
 
 Create `docs/releases/vX.Y.Z.md` in the version-bump PR. Use the actual version in the first heading, `# What's new in vX.Y.Z`, and follow it with a short summary or a few bullets. Run `node scripts/check-release-version.ts <previous-package-version>` from the candidate checkout using the previous version from `main`. **Check release version** enforces matching notes on version-bump PRs and publishing runs. Manual build-only runs can rehearse a candidate without notes.
 
+## Prepare a release from labels
+
+In **Settings → Actions → General → Workflow permissions**, opt in by enabling **Allow GitHub Actions to create and approve pull requests**. GitHub disables this setting by default for new personal repositories. The **Prepare release** workflow uses the permission to maintain one draft PR on the reserved `automation/task-inbox-release` branch. [Repository Actions settings](https://github.com/kelvicthrust/paseo-task-inbox/settings/actions)
+
+Apply `release:patch`, `release:minor`, or `release:major` to a change PR before merging it into `main`. Use patch for compatible fixes, minor for compatible features, and major for breaking changes. The highest label on merged PRs since the last published release determines the bump. Unlabeled merges can still appear in the draft notes. To label a PR after it merges or reconcile after changing labels, run **Prepare release** on `main`. [Prepare release workflow](https://github.com/kelvicthrust/paseo-task-inbox/actions/workflows/prepare-release.yml)
+
+Review the version and the draft [What's new](#draft-whats-new) in the release PR and edit `docs/releases/vX.Y.Z.md` there. The workflow preserves reviewed edits when it refreshes the draft. If GitHub prompts you to **Approve workflows to run** when the bot opens or updates the PR, approve the checks. Mark the PR ready and merge it after review and passing checks. [GitHub Actions workflow approval](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow)
+
+If a change PR with a higher release label lands before a stale release PR merges, **Release** blocks publication of the lower version and **Prepare release** opens a correction PR. Review and merge the correction to publish the intended version.
+
 ## Publish with GitHub Actions
 
 In the npm package's settings, configure the GitHub Actions trusted publisher with owner **kelvicthrust**, repository **paseo-task-inbox**, workflow **release.yml**, and an empty environment. Enable **Allow npm publish** and **Allow npm dist-tag**. [npm trusted publishers](https://docs.npmjs.com/trusted-publishers/)
 
-Run `npm version patch --no-git-tag-version` or choose a minor or major bump. Review the package and lockfile changes and the matching [What's new](#draft-whats-new) Markdown. Confirm **Check release version** passes before merging. Merging a higher stable version into `main` triggers **Release**. It publishes under `next`, checks the npm download against the tested archive, promotes the version to `latest`, and creates a GitHub release at the tested commit. The release uses the reviewed Markdown as its body and attaches it alongside the tarball and `SHA256SUMS`.
+For a manual version-bump PR, run `npm version patch --no-git-tag-version` or choose a minor or major bump. Review the package and lockfile changes and the matching [What's new](#draft-whats-new) Markdown. Confirm **Check release version** passes before merging either a manual or automated release PR. Merging a higher stable version into `main` triggers **Release**. It publishes under `next`, checks the npm download against the tested archive, promotes the version to `latest`, and creates a GitHub release at the tested commit. The release uses the reviewed Markdown as its body and attaches it alongside the tarball and `SHA256SUMS`.
 
 If a job fails after npm accepts a version, rerun failed jobs on the original workflow run to reuse the verified artifact. If that version exists with different bytes, prepare a new version.
 

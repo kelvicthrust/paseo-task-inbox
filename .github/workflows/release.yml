@@ -36,6 +36,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -81,6 +82,12 @@ jobs:
             fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Check queued release labels
+        if: github.event_name == 'push' && steps.version.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/prepare-label-release.ts --check "$GITHUB_SHA" "$VERSION"
 
   build:
     name: Build and test release package
