@@ -2,6 +2,7 @@ import type { PluginSurfaceProps } from '@getpaseo/plugin/client';
 import { ExternalLink, Icon, ScrollView } from '@getpaseo/plugin/client/ui';
 import type { ReactNode, Ref } from 'react';
 import { Pressable, Text, View } from 'react-native';
+import type { PullRequestStatus } from '../shared/outcome.ts';
 
 export type Colors = PluginSurfaceProps['theme']['colors'];
 
@@ -12,6 +13,13 @@ export const statusLabel = {
   blocked: 'Blocked',
   completed: 'Completed',
 } as const;
+
+export const pullRequestLabel = {
+  draft: 'Draft PR',
+  open: 'PR open',
+  closed: 'PR closed',
+  merged: 'Merged',
+} satisfies Record<PullRequestStatus, string>;
 
 export function Page({
   children, footer, overlay, theme, scrollRef,
@@ -155,13 +163,14 @@ export function IconAction({
   );
 }
 
-export function VerifiedPr({ colors, url }: { colors: Colors; url?: string }) {
-  const pr = url?.match(/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/([1-9]\d*)$/);
+export function PullRequestLink({ colors, url, state }: { colors: Colors; url?: string; state?: PullRequestStatus }) {
+  const pr = url?.match(/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/([1-9]\d*)$/i);
   if (!pr || !url) return null;
+  const label = state ? `${pullRequestLabel[state]} · #${pr[1]}` : `Verified PR #${pr[1]}`;
   return (
-    <ExternalLink href={url} accessibilityLabel={`Open verified PR ${pr[1]}`}>
+    <ExternalLink href={url} accessibilityLabel={`Open pull request ${pr[1]}, ${state ? pullRequestLabel[state] : 'verified'}`}>
       <View style={{ minHeight: 44, justifyContent: 'center' }}>
-        <Text style={{ color: colors.accent }}>Verified PR #{pr[1]}</Text>
+        <Text style={{ color: colors.accent }}>{label}</Text>
       </View>
     </ExternalLink>
   );

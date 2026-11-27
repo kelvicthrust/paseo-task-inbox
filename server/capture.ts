@@ -6,6 +6,7 @@ import {
 import { screenshotLimit } from "../shared/screenshot.ts";
 import { createImageStaging } from "./image-staging.ts";
 import type { ImageType } from "./inbox-types.ts";
+import { missingResult } from "./reporting.ts";
 import {
   editState, insertImage, insertSaveReceipt, readImageChunk, readImageMetadata, readSaveReceipt,
   readSnapshot, readState, readStoredImages, removeImages,
@@ -16,11 +17,14 @@ type ItemTarget = { workspaceId: string; itemId: string };
 type ImageStaging = ReturnType<typeof createImageStaging>;
 
 export function itemView(item: Item, batch: Batch | null): InboxItemView {
-  const { id, number, text, status, detail, images, prUrl } = item;
+  const { id, number, text, status, images, pullRequest } = item;
   const chatId = item.chatId ?? (batch?.itemIds.includes(id) ? batch.agentId : undefined);
+  const prUrl = pullRequest?.url ?? item.prUrl;
+  const detail = pullRequest && item.detail === missingResult ? "Passing check pending." : item.detail;
   return {
     id, number, text, status, detail, images, version: item.version ?? 1,
     ...(prUrl ? { prUrl } : {}),
+    ...(pullRequest ? { prState: pullRequest.state } : {}),
     ...(status !== "inbox" && chatId ? { chatId } : {}),
   };
 }

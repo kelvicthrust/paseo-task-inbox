@@ -16,7 +16,7 @@ import {
   type InboxItemView,
   type InboxView,
 } from '../shared/rpc.ts';
-import { Action, Copy, IconAction, Page, VerifiedPr, statusLabel, type Colors } from './controls.tsx';
+import { Action, Copy, IconAction, Page, PullRequestLink, pullRequestLabel, statusLabel, type Colors } from './controls.tsx';
 import { useKeyboardNavigation } from './browser-capture.tsx';
 import { DispatchChoice, DispatchPicker } from './dispatch-picker.tsx';
 import { TaskEditor, type ReadyInboxItem } from './editor.tsx';
@@ -515,7 +515,7 @@ export function WorkspaceInbox({
       )}
       {batch && (
         <View style={{ borderRadius: 8, borderWidth: 1, borderColor: colors.border, padding: 10, gap: 4 }}>
-          <Copy colors={colors} heading size={14}>Batch · {statusLabel[batch.status]}</Copy>
+          <Copy colors={colors} heading size={14}>Batch · {batch.prState ? pullRequestLabel[batch.prState] : statusLabel[batch.status]}</Copy>
           {batchAgent && <Copy colors={colors} muted size={12}>{batchAgent.label}</Copy>}
           {batch.detail && <Copy colors={colors} size={13}>{batch.detail}</Copy>}
           {openBatchChat && (
@@ -719,12 +719,14 @@ function HistoryRow({ item, colors, batchDetail }: { item: InboxItemView; colors
       <Copy colors={colors}>{item.text}</Copy>
       <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 7 }}>
         <TaskMeta item={item} colors={colors} />
-        <Text style={{ color: item.status === 'blocked' ? colors.statusWarning : item.status === 'completed' ? colors.statusSuccess : colors.foregroundMuted, fontSize: 12 }}>
-          {statusLabel[item.status]}
-        </Text>
+        {(!item.prState || item.status !== 'blocked') && (
+          <Text style={{ color: item.status === 'blocked' ? colors.statusWarning : item.status === 'completed' ? colors.statusSuccess : colors.foregroundMuted, fontSize: 12 }}>
+            {statusLabel[item.status]}
+          </Text>
+        )}
       </View>
       {item.detail && item.detail !== batchDetail && <Copy colors={colors} muted size={13}>{item.detail}</Copy>}
-      <VerifiedPr colors={colors} url={item.prUrl} />
+      <PullRequestLink colors={colors} url={item.prUrl} state={item.prState} />
     </View>
   );
 }

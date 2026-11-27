@@ -14,6 +14,7 @@ import {
   listInboxAgentModels,
   listWorkspaces,
   maxItemScreenshots,
+  readBatchOutcome,
   readInbox,
   readInboxBadge,
   readInboxImageChunk,
@@ -36,6 +37,7 @@ export default function contribute(server: PluginServerContext) {
   let inbox: ReturnType<typeof createInbox> | undefined;
   let native: Paseo | undefined;
   let drive: Promise<void> | undefined;
+  let pullRequestDrive: Promise<void> | undefined;
   let stopped = false;
   let tickFailed = false;
 
@@ -66,11 +68,17 @@ export default function contribute(server: PluginServerContext) {
 
   async function tick() {
     if (stopped) return;
-    if (!inbox && await hasUnfinishedBatches(dataDir)) {
+    if (!inbox && await hasUnfinishedBatches(dataDir, true)) {
       if (!native && !inbox && !stopped) await wakeLocalInbox(home);
       if (native && !inbox && !stopped) await service(native);
     }
-    if (!stopped && inbox) await (await inbox).tick();
+    if (!stopped && inbox) {
+      const current = await inbox;
+      pullRequestDrive ??= current.syncPullRequests().catch(() => {
+        console.warn('[task-inbox] Pull request status sync is waiting for the inbox store.');
+      }).finally(() => { pullRequestDrive = undefined; });
+      await current.tick();
+    }
   }
 
   function wake() {
@@ -91,6 +99,8 @@ export default function contribute(server: PluginServerContext) {
   });
   server.handle(listWorkspaces, async (_, { paseo }) => (await withContext(paseo)).workspaces());
   server.handle(readInbox, async ({ workspaceId }, { paseo }) => (await withContext(paseo)).view(workspaceId));
+  server.handle(readBatchOutcome, async ({ agentId, batchId }, { paseo }) =>
+    (await withContext(paseo)).batchOutcome(agentId, batchId));
   server.handle(readInboxBadge, async ({ workspaceId }, { paseo }) => (await withContext(paseo)).badge(workspaceId));
   server.handle(addInboxItem, async ({ workspaceId, text }, { paseo }) => {
     await (await withContext(paseo)).add(workspaceId, text);
@@ -146,6 +156,7 @@ export default function contribute(server: PluginServerContext) {
     await stopSettings();
     await uploads.close();
     await drive;
+    await pullRequestDrive;
     await (await inbox)?.close();
   };
 }

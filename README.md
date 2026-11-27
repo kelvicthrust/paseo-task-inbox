@@ -78,9 +78,11 @@ In **Settings → Plugins → Task Inbox**, open **Screenshot uploads** and save
 
 ## Verified fixes and blocked batches
 
-**Completed** means the agent reported a passing test or manual check for that bug, and Task Inbox confirmed the matching fix evidence on GitHub. The plugin uses the host's `gh` session to check that the PR is open and ready for review in the workspace repository, that its head matches the reported revision, and that the commit named for the bug belongs to the PR. Merging and deploying each require separate authorization.
+Task Inbox finds PRs with matching task markers and fix commits in the workspace repository. It uses the host's `gh` session to follow pushes, merges, and closures. The PR link in Explorer and in the original chat’s results card shows the latest known GitHub status, even when a check is still pending.
 
-Task Inbox queues a batch while its chat is busy. Another message can start a turn between the idle check and dispatch. A reconnect reuses the original dispatch ID. If a daemon restart restores chat history without enough information to match the original turn, the batch stays **Blocked** with its receipt preserved. Bugs also stay visible when verification fails or the agent reports a blocker.
+**Completed** means the agent reported a passing test or manual check for that bug, and Task Inbox confirmed the matching revision and fix commit on a ready or merged PR. Merging and deploying each require separate authorization.
+
+Task Inbox queues a batch while its chat is busy. Another message can start a turn between the idle check and dispatch. A reconnect reuses the original dispatch ID. If a daemon restart restores chat history without enough information to match the original turn, the receipt is preserved and verification stays pending. Bugs also stay visible when verification fails or the agent reports a blocker.
 
 ## Data and permissions
 
