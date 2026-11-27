@@ -3,7 +3,7 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { basename } from "node:path";
 import { taskInboxProviders } from "../shared/agent.ts";
 import { batchOutcomeKind, batchOutcomeVersion } from "../shared/outcome.ts";
-import { readOrigin, verifyPullRequest } from "./github.ts";
+import { githubPullRequests, readOrigin, verifyPullRequest } from "./github.ts";
 import type { InboxAgent, InboxHost, InboxWorkspace, TimelineEntry } from "./inbox-types.ts";
 
 function visibleWorkspace(workspace: PaseoWorkspace): InboxWorkspace | null {
@@ -159,5 +159,6 @@ export function createPaseoHost(paseo: Paseo, getPluginApi: () => Paseo | undefi
       });
     },
     verify: verifyPullRequest,
+    pullRequests: githubPullRequests,
   };
 }

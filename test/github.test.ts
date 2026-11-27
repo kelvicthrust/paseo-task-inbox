@@ -43,6 +43,12 @@ test("checks the exact open ready PR head in the selected origin and preserves i
   assert.equal(requests.length, 1);
 });
 
+test("verifies matching evidence on a PR that already merged", async () => {
+  const verify = createPullRequestVerifier(async () => repository, async () => ({ ...current, state: "MERGED" }));
+  assert.deepEqual(await verify(report), { status: "verified", url, revision, fixRevision });
+  assert.equal((await verify({ ...report, revision: "a".repeat(40) })).status, "rejected");
+});
+
 test("rejects changed origin, head, number, repository, draft and closed pull requests", async () => {
   const wrongOrigin = createPullRequestVerifier(async () => "changed/path", async () => assert.fail("Must not query GitHub"));
   assert.equal((await wrongOrigin(report)).status, "rejected");
@@ -52,7 +58,6 @@ test("rejects changed origin, head, number, repository, draft and closed pull re
     { url: "https://github.com/other/project/pull/12" },
     { isDraft: true },
     { state: "CLOSED" },
-    { state: "MERGED" },
     { body: "" },
     { body: body.replace(itemId, "e998d0b4-f362-4d57-b3ba-c90d664c204d") },
     { commits: [{ oid: revision }] },

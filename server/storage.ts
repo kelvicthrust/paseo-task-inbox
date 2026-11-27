@@ -1,13 +1,19 @@
 import { open, lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { BatchOutcome } from "../shared/outcome.ts";
+import type { BatchOutcome, PullRequestStatus } from "../shared/outcome.ts";
 import type { BatchStatus, ImageType, ItemStatus, NewChatConfig, PullRequestClaim, TimelineCursor } from "./inbox-types.ts";
 
 export interface Candidate extends PullRequestClaim {
   detail: string;
   attempts: number;
   retryAt: number;
+}
+
+export interface TrackedPullRequest {
+  url: string;
+  state: PullRequestStatus;
+  head: string;
 }
 
 export interface Item {
@@ -23,6 +29,9 @@ export interface Item {
   revision?: string;
   fixRevision?: string;
   candidate?: Candidate;
+  reportedFix?: Omit<Candidate, "attempts" | "retryAt">;
+  dispatch?: { batchId: string; repository: string };
+  pullRequest?: TrackedPullRequest;
 }
 
 export interface Batch {
@@ -59,6 +68,12 @@ export interface WorkspaceState {
   batch: Batch | null;
   annotations: Annotation[];
   nextItemNumber: number;
+}
+
+export function itemDispatch(item: Item, batch: Batch | null): Item["dispatch"] {
+  return item.dispatch ?? (batch?.itemIds.includes(item.id)
+    ? { batchId: batch.id, repository: batch.repository }
+    : undefined);
 }
 
 export interface StoredImage {
@@ -184,6 +199,29 @@ export function editState<T>(
 export function activeWorkspaces(database: DatabaseSync): string[] {
   return database.prepare("SELECT id FROM workspaces WHERE active = 1").all()
     .map(({ id }) => id as string);
+}
+
+export function pullRequestWorkspaces(database: DatabaseSync, limit = -1): string[] {
+  return database.prepare(`
+    SELECT id FROM workspaces
+    WHERE EXISTS (
+      SELECT 1 FROM json_each(data, '$.items') AS item
+      WHERE json_extract(item.value, '$.status') IN ('working', 'blocked', 'completed')
+        AND (
+          coalesce(json_extract(item.value, '$.pullRequest.state'), '') <> 'merged'
+          OR (
+            json_extract(item.value, '$.reportedFix.revision') = json_extract(item.value, '$.pullRequest.head')
+            AND lower(json_extract(item.value, '$.reportedFix.url')) = lower(json_extract(item.value, '$.pullRequest.url'))
+          )
+        )
+        AND (
+          json_extract(item.value, '$.dispatch.batchId') IS NOT NULL
+          OR json_extract(item.value, '$.prUrl') IS NOT NULL
+          OR json_extract(item.value, '$.id') IN (SELECT value FROM json_each(data, '$.batch.itemIds'))
+        )
+    )
+    ORDER BY id LIMIT ?
+  `).all(limit).map(({ id }) => id as string);
 }
 
 export function imageSize(database: DatabaseSync, workspaceId: string, itemId: string): number {

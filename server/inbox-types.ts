@@ -1,5 +1,6 @@
 import type { BatchOutcome } from "../shared/outcome.ts";
 import type { InboxAgentModel } from "../shared/rpc.ts";
+import type { PullRequestRecord } from "./github.ts";
 
 export type ImageType = "image/png" | "image/jpeg";
 export type ItemStatus = "inbox" | "queued" | "working" | "blocked" | "completed";
@@ -75,4 +76,8 @@ export interface InboxHost {
   canAnnotate?(): boolean;
   annotate?(agentId: string, outcome: BatchOutcome): Promise<void>;
   verify(input: PullRequestClaim & { workspace: InboxWorkspace; repository: string }): Promise<Verification>;
+  pullRequests?: {
+    search(repository: string, batchId: string): Promise<string[]>;
+    read(repository: string, url: string): Promise<PullRequestRecord | null>;
+  };
 }

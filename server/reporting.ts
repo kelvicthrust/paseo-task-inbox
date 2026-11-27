@@ -4,6 +4,7 @@ import type { Batch, Item } from "./storage.ts";
 
 const prefix = "PASEO_TASK_INBOX_V1 ";
 export const prEvidencePrefix = "PASEO_TASK_INBOX_FIX_V1";
+export const missingResult = "The selected chat finished without a result for this bug.";
 const fields = {
   batchId: z.uuid(),
   itemId: z.uuid(),

@@ -13,6 +13,7 @@ import {
   type TimelineEntry,
 } from "../server/inbox.ts";
 import type { BatchOutcome } from "../shared/outcome.ts";
+import { createPullRequestVerifier, type PullRequestRecord } from "../server/github.ts";
 import { inboxImageChunkBytes } from "../shared/rpc.ts";
 import { screenshotGrantMs, screenshotLimit } from "../shared/screenshot.ts";
 
@@ -31,6 +32,158 @@ const verification = { check: "Open the saved view", observed: "The corrected ti
 function report(batchId: string, itemId: string, fields: object) {
   return "PASEO_TASK_INBOX_V1 " + JSON.stringify({ batchId, itemId, ...fields });
 }
+
+test("a legacy finished batch with shell-only results recovers a merged PR for both bugs", async (t) => {
+  const f = await fixture(t);
+  await f.inbox.add(workspace.id, "First bug");
+  await f.inbox.add(workspace.id, "Second bug");
+  const ids = (await f.inbox.view(workspace.id)).items.map(({ id }) => id);
+  await f.inbox.start(workspace.id, agent.id, ids);
+  const batchId = (await f.inbox.view(workspace.id)).batch!.id;
+  await f.inbox.tick();
+  // Paseo projects shell output as an "other" entry.
+  f.state.entries.push({ seq: 2, turnId: "batch-turn", type: "other" });
+  await f.inbox.tick();
+  f.state.clock += 6_000;
+  await f.inbox.tick();
+  assert.deepEqual((await f.inbox.view(workspace.id)).items.map(({ status }) => status), ["blocked", "blocked"]);
+  const db = new DatabaseSync(join(f.dir, "inbox.sqlite3"));
+  db.exec("UPDATE workspaces SET data = json_remove(data, '$.items[0].dispatch', '$.items[1].dispatch')");
+  db.close();
+  await f.restart();
+  assert.equal(await hasUnfinishedBatches(f.dir), false);
+  assert.equal(await hasUnfinishedBatches(f.dir, true), true);
+
+  let requests = 0;
+  f.host.pullRequests = {
+    async search(repository, batch) {
+      assert.equal(repository, "example/project");
+      assert.equal(batch, batchId);
+      return [prUrl];
+    },
+    async read() {
+      requests++;
+      return {
+        url: prUrl, number: 23, state: "MERGED", isDraft: false, headRefOid: revision,
+        body: ids.map((id) => `PASEO_TASK_INBOX_FIX_V1 ${batchId} ${id} ${revision}`).join("\n"),
+        commits: [{ oid: revision }],
+      };
+    },
+  };
+  await f.inbox.syncPullRequests();
+  const expected = [1, 2].map((number) => ({
+    number, status: "blocked", detail: "Passing check pending.", prUrl, prState: "merged",
+  }));
+  assert.deepEqual(await f.inbox.batchOutcome(agent.id, batchId), expected);
+  assert.deepEqual((await f.inbox.view(workspace.id)).items.map(({ number, status, detail, prUrl, prState }) =>
+    ({ number, status, detail, prUrl, prState })), expected);
+  assert.equal(await f.inbox.batchOutcome("another-chat", batchId), null);
+  assert.equal(requests, 1);
+  assert.equal(await hasUnfinishedBatches(f.dir, true), false);
+  assert.equal(f.state.sent.length, 1);
+  assert.equal(f.state.annotations.length, 1);
+});
+
+test("discovery waits for exact evidence and refreshes a linked PR across pushes, closure and restart", async (t) => {
+  const f = await fixture(t);
+  await f.inbox.add(workspace.id, "Fix a bug");
+  const [item] = (await f.inbox.view(workspace.id)).items;
+  await f.inbox.start(workspace.id, agent.id, [item.id]);
+  const batchId = (await f.inbox.view(workspace.id)).batch!.id;
+  await f.inbox.tick();
+  await f.inbox.tick();
+  f.state.clock += 6_000;
+  await f.inbox.tick();
+
+  let searches = 0;
+  let readFails = false;
+  const marker = `PASEO_TASK_INBOX_FIX_V1 ${batchId} ${item.id} ${revision}`;
+  let record: PullRequestRecord = {
+    url: prUrl, number: 23, state: "OPEN", isDraft: true, headRefOid: revision,
+    body: marker.replace(item.id, "wrong-item"), commits: [{ oid: revision }],
+  };
+  f.host.pullRequests = {
+    async search() {
+      searches++;
+      return searches === 1 ? [] : ["https://github.com/wrong/project/pull/23", prUrl];
+    },
+    async read(repository, url) {
+      assert.equal(repository, "example/project");
+      assert.equal(url, prUrl);
+      if (readFails) throw new Error("GitHub unavailable");
+      return record;
+    },
+  };
+  async function status(expected: string | undefined) {
+    await f.inbox.syncPullRequests();
+    const [current] = (await f.inbox.batchOutcome(agent.id, batchId))!;
+    assert.equal(current.prState, expected);
+    assert.equal(current.status, "blocked");
+    f.state.clock += 120_000;
+  }
+  await status(undefined); // Search indexing has not caught up.
+  await status(undefined); // A marker for another item cannot link.
+  record = { ...record, body: marker, commits: [] };
+  await status(undefined); // The fix commit must belong to the PR.
+  record = { ...record, commits: [{ oid: revision }] };
+  await status("draft");
+  assert.equal(searches, 4);
+
+  const pushed = "a".repeat(40);
+  record = { ...record, isDraft: false, headRefOid: pushed, commits: [...record.commits, { oid: pushed }] };
+  await status("open");
+  const db = new DatabaseSync(join(f.dir, "inbox.sqlite3"), { readOnly: true });
+  assert.equal(db.prepare("SELECT json_extract(data, '$.items[0].pullRequest.head') AS head FROM workspaces").get()!.head, pushed);
+  db.close();
+
+  readFails = true;
+  await status("open");
+  readFails = false;
+  record = { ...record, state: "CLOSED" };
+  await status("closed");
+  record = { ...record, state: "OPEN" };
+  await status("open");
+  await f.inbox.add(workspace.id, "A newer bug");
+  const [, newer] = (await f.inbox.view(workspace.id)).items;
+  await f.inbox.start(workspace.id, agent.id, [newer.id]);
+  await f.restart();
+  record = { ...record, state: "MERGED" };
+  await status("merged");
+  assert.equal(searches, 4);
+  assert.equal(await f.inbox.batchOutcome(agent.id, "unrelated-batch"), null);
+});
+
+test("a persisted passing check verifies after a draft opens and retains its history after merge", async (t) => {
+  const f = await fixture(t);
+  await f.inbox.add(workspace.id, "Repair the title");
+  const [item] = (await f.inbox.view(workspace.id)).items;
+  await f.inbox.start(workspace.id, agent.id, [item.id]);
+  const batchId = (await f.inbox.view(workspace.id)).batch!.id;
+  await f.inbox.tick();
+  let record: PullRequestRecord = {
+    url: prUrl, number: 23, state: "OPEN", isDraft: true, headRefOid: revision,
+    body: `PASEO_TASK_INBOX_FIX_V1 ${batchId} ${item.id} ${revision}`, commits: [{ oid: revision }],
+  };
+  f.host.verify = createPullRequestVerifier(f.host.repository, async () => record);
+  f.host.pullRequests = { search: async () => [], read: async () => record };
+  f.addAssistant(report(batchId, item.id, { status: "completed", detail: "Fixed the title.", url: prUrl, revision, verification }));
+  await f.inbox.tick();
+  await f.inbox.syncPullRequests();
+  assert.equal((await f.inbox.view(workspace.id)).items[0].status, "blocked");
+  await f.restart();
+  record = { ...record, isDraft: false };
+  await f.inbox.syncPullRequests();
+  const [checked] = (await f.inbox.batchOutcome(agent.id, batchId))!;
+  assert.equal(checked.status, "completed");
+  assert.equal(checked.prState, "open");
+  assert.match(checked.detail, /The corrected title is visible/);
+  assert.equal((await f.inbox.view(workspace.id)).batch?.status, "completed");
+  f.state.clock += 30_000;
+  record = { ...record, state: "MERGED" };
+  await f.inbox.syncPullRequests();
+  assert.deepEqual(await f.inbox.batchOutcome(agent.id, batchId), [{ ...checked, prState: "merged" }]);
+  assert.equal(f.state.annotations.length, 1);
+});
 
 async function fixture(t: TestContext, initialize?: (dir: string) => Promise<void>) {
   const dir = await mkdtemp(join(tmpdir(), "paseo-task-inbox-"));

@@ -1,5 +1,6 @@
 import { defineRpc } from '@getpaseo/plugin';
 import { z } from 'zod';
+import { liveOutcomeItem, pullRequestStatus } from './outcome.ts';
 import { screenshotLimit } from './screenshot.ts';
 
 export const maxItemText = 8_000;
@@ -42,6 +43,7 @@ const item = z.object({
   version,
   detail: z.string(),
   prUrl: z.string().optional(),
+  prState: pullRequestStatus.optional(),
   chatId: id.optional(),
 });
 const batch = z.object({
@@ -49,6 +51,7 @@ const batch = z.object({
   agentId: id,
   status: status.exclude(['inbox']),
   detail: z.string(),
+  prState: pullRequestStatus.optional(),
 });
 const view = z.object({
   agentId: id.nullable(),
@@ -99,6 +102,12 @@ export const readInbox = defineRpc({
   name: 'inbox.read',
   input: workspaceId,
   output: view,
+});
+
+export const readBatchOutcome = defineRpc({
+  name: 'inbox.read-batch-outcome',
+  input: z.strictObject({ agentId: id, batchId: z.uuid() }),
+  output: z.array(liveOutcomeItem).max(maxBatchItems).nullable(),
 });
 
 export const readInboxBadge = defineRpc({

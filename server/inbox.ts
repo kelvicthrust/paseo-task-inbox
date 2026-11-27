@@ -8,8 +8,9 @@ import { createCapture, itemView } from "./capture.ts";
 import { createImageStaging } from "./image-staging.ts";
 import type { InboxAgent, InboxHost, InboxWorkspace, NewChatConfig, TimelineCursor, TimelinePage } from "./inbox-types.ts";
 import { createPaseoHost } from "./paseo.ts";
-import { flushAssistant, formatPrompt, readTimeline } from "./reporting.ts";
-import { activeWorkspaces, editState, imageSize, openStorage, readImages, readState } from "./storage.ts";
+import { completeItem, createPullRequestSync } from "./pr-sync.ts";
+import { flushAssistant, formatPrompt, missingResult, readTimeline } from "./reporting.ts";
+import { activeWorkspaces, editState, imageSize, itemDispatch, openStorage, pullRequestWorkspaces, readImages, readState } from "./storage.ts";
 import type { Annotation, Batch, WorkspaceState } from "./storage.ts";
 
 export type { InboxAgent, InboxHost, TimelineEntry } from "./inbox-types.ts";
@@ -19,7 +20,7 @@ const retryDelay = 15_000;
 const reconcileGrace = 60_000;
 const idleGrace = 5_000;
 
-export async function hasUnfinishedBatches(dataDir: string): Promise<boolean> {
+export async function hasUnfinishedBatches(dataDir: string, includePullRequests = false): Promise<boolean> {
   try {
     await lstat(join(dataDir, "inbox.sqlite3"));
   } catch (error) {
@@ -28,7 +29,7 @@ export async function hasUnfinishedBatches(dataDir: string): Promise<boolean> {
   }
   const database = await openStorage(dataDir);
   try {
-    return activeWorkspaces(database).length > 0;
+    return activeWorkspaces(database).length > 0 || (includePullRequests && pullRequestWorkspaces(database, 1).length > 0);
   } finally {
     database.close();
   }
@@ -74,10 +75,11 @@ function finish(state: WorkspaceState, batch: Batch, blocker?: string) {
   if (items.some(({ status }) => status === "working" || status === "queued")) return;
   const completed = items.filter(({ status }) => status === "completed").length;
   const blocked = items.length - completed;
+  const wasFinished = batch.phase === "finished";
   batch.phase = "finished";
   batch.status = blocked ? "blocked" : "completed";
   batch.detail = blocked === items.length && blocker ? blocker : `${completed} completed, ${blocked} blocked.`;
-  if (batch.newChat) return;
+  if (wasFinished || batch.newChat) return;
   const outcome: BatchOutcome = {
     batchId: batch.id,
     items: items.map(({ number, detail, prUrl }) => {
@@ -110,8 +112,12 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
   const database = await openStorage(dataDir);
   const staging = createImageStaging(now);
   let ticking: Promise<void> | null = null;
+  let syncing: Promise<void> | null = null;
   let closing: Promise<void> | null = null;
   const getState = (workspaceId: string) => readState(database, workspaceId);
+  const sync = createPullRequestSync(host, database, now, (state) => {
+    if (state.batch?.phase === "finished") finish(state, state.batch);
+  });
 
   async function getWorkspace(id: string) {
     const workspace = await host.workspace(id);
@@ -147,7 +153,10 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
       if (imageBytes > maxBatchImageBytes) throw new Error("Select a batch with up to 24 MiB of images.");
       if (state.batch) {
         for (const item of selectedItems(state, state.batch)) {
-          if (item.status !== "inbox") item.chatId ??= state.batch.agentId;
+          if (item.status !== "inbox") {
+            item.chatId ??= state.batch.agentId;
+            item.dispatch ??= itemDispatch(item, state.batch);
+          }
         }
       }
       const id = randomUUID();
@@ -160,6 +169,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
         item.status = "queued";
         item.detail = destination.detail;
         item.chatId = destination.agentId;
+        item.dispatch = { batchId: id, repository };
       }
     });
   }
@@ -205,12 +215,10 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
         }
         delete target.candidate;
         if (result.status === "verified") {
-          target.status = "completed";
-          target.prUrl = result.url;
-          target.revision = result.revision;
-          target.fixRevision = result.fixRevision;
-          target.detail = `Verified PR head ${result.revision} and fix commit ${result.fixRevision}. ${candidate.detail}`;
+          completeItem(target, result, candidate.detail);
         } else {
+          const { url, revision, batchId, itemId, detail } = candidate;
+          target.reportedFix = { url, revision, batchId, itemId, detail };
           target.status = "blocked";
           target.detail = result.detail;
         }
@@ -464,7 +472,7 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
             item.status = "blocked";
             item.detail = current.interrupted
               ? "Another message interrupted batch reporting in the selected chat."
-              : "The selected chat finished without a result for this bug.";
+              : missingResult;
           }
         }
         finish(state, current);
@@ -550,16 +558,36 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
         .filter((agent) => eligibleChat(agent, agent.id, workspaceId))
         .map((agent) => ({ id: agent.id, label: agent.label, provider: agent.provider, dispatchStatus: dispatchStatus(agent) }));
       const { items, batch } = getState(workspaceId);
+      const batchItems = batch?.phase === "finished" ? items.filter(({ id }) => batch.itemIds.includes(id)) : [];
+      const firstPrState = batchItems[0]?.pullRequest?.state;
+      const prState = firstPrState && batchItems.every((item) => item.pullRequest?.state === firstPrState) ? firstPrState : undefined;
+      const pendingChecks = prState ? batchItems.filter(({ status }) => status !== "completed").length : 0;
       return {
         agents,
         agentId: batch && agents.some(({ id }) => id === batch.agentId) ? batch.agentId : null,
         canStart: !batch || batch.phase === "finished",
         items: items.map((item) => itemView(item, batch)),
-        batch: batch && { id: batch.id, agentId: batch.agentId, status: batch.status, detail: batch.detail },
+        batch: batch && {
+          id: batch.id, agentId: batch.agentId, status: batch.status,
+          detail: pendingChecks ? `Passing checks pending for ${pendingChecks} of ${batchItems.length} tasks.` : batch.detail,
+          ...(prState ? { prState } : {}),
+        },
       };
     },
     async badge(workspaceId: string) {
       return summarize(getState(workspaceId));
+    },
+    async batchOutcome(agentId: string, batchId: string) {
+      const agent = await host.agent(agentId);
+      if (agent?.id !== agentId || !agent.workspaceId) return null;
+      const { items, batch } = getState(agent.workspaceId);
+      const results = items.flatMap((item) => {
+        if (item.status === "inbox" || itemDispatch(item, batch)?.batchId !== batchId) return [];
+        const { number, detail, prUrl, prState, chatId } = itemView(item, batch);
+        if (chatId !== agentId) return [];
+        return [{ number, status: item.status, detail, ...(prUrl ? { prUrl } : {}), ...(prState ? { prState } : {}) }];
+      });
+      return results.length ? results : null;
     },
     async start(workspaceId: string, agentId: string, itemIds: string[]) {
       const workspace = await getWorkspace(workspaceId);
@@ -609,10 +637,18 @@ export async function createInboxService(host: InboxHost, dataDir: string, now =
       }
       return ticking;
     },
+    syncPullRequests() {
+      if (closing) return closing;
+      syncing ??= sync().finally(() => { syncing = null; });
+      return syncing;
+    },
     close() {
       closing ??= (async () => {
         try {
-          await ticking;
+          const results = await Promise.allSettled([ticking, syncing]);
+          for (const result of results) {
+            if (result.status === "rejected") throw result.reason;
+          }
         } finally {
           staging.clear();
           database.close();
