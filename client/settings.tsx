@@ -27,7 +27,7 @@ export function AgentSettings({ host }: PluginSurfaceProps) {
         {settings.status === 'ready' && data && !error && (
           <SettingsSelect
             label="Model"
-            hint={data.length ? 'Task Inbox uses this model for each new batch chat.' : 'Set up Codex or Claude Code on this host to see available models.'}
+            hint={data.length ? 'Task Inbox suggests this model when you choose New chat in the sidebar.' : 'Set up Codex or Claude Code on this host to see available models.'}
             error={settings.saveError ?? (unavailable ? 'The saved model is unavailable.' : null)}
             value={saved}
             options={[

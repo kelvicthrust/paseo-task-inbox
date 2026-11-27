@@ -69,25 +69,34 @@ export function createPaseoHost(paseo: Paseo, getPluginApi: () => Paseo | undefi
       const agent = (await paseo.agents.ref(id).refresh())?.agent;
       return agent?.id === id ? visibleAgent(agent) : null;
     },
-    async agentModels(workspace) {
+    async agentModels(workspace, providerFilter) {
       const { providers, error } = await paseo.providers.listAvailable();
       if (error) throw new Error("Paseo could not check provider availability.");
-      const models = await Promise.all(Object.entries(taskInboxProviders)
-        .filter(([provider]) => providers.some((entry) => entry.provider === provider && entry.available))
+      const catalogs = await Promise.allSettled(Object.entries(taskInboxProviders)
+        .filter(([provider]) => (providerFilter === undefined || provider === providerFilter) &&
+          providers.some((entry) => entry.provider === provider && entry.available))
         .map(async ([provider, label]) => {
           const result = await paseo.providers.listModels(provider, { cwd: workspace?.directory });
+          if (result.error) throw new Error(`Paseo could not check available ${label} models.`);
           return (result.models ?? [])
             .filter((model) => model.isSelectable !== false)
-            .map((model) => ({ value: `${provider}/${model.id}`, label: `${label} · ${model.label}` }));
+            .map((model) => ({
+              value: `${provider}/${model.id}`,
+              label: `${label} · ${model.label}`,
+              thinkingOptions: model.thinkingOptions?.map(({ id, label }) => ({ id, label })),
+            }));
         }));
-      return models.flat();
+      const models = catalogs.flatMap((catalog) => catalog.status === "fulfilled" ? catalog.value : []);
+      const failure = catalogs.find((catalog) => catalog.status === "rejected");
+      if (!models.length && failure) throw failure.reason;
+      return models;
     },
-    async createAgent(workspace, { agentId, batchId, model }) {
+    async createAgent(workspace, { agentId, batchId, model, thinkingOptionId }) {
       const agent = await paseo.workspaces.ref(workspace.id).agents.create({
         agentId,
         idempotencyKey: `task-inbox:${batchId}`,
         title: "Task Inbox",
-        config: { provider: model },
+        config: { provider: model, ...(thinkingOptionId === undefined ? {} : { thinkingOptionId }) },
       });
       if (agent.id !== agentId) throw new Error("Paseo did not confirm the requested chat.");
     },

@@ -21,7 +21,18 @@ const imageSize = z.int().min(1).max(screenshotLimit);
 const description = z.string().trim().min(1).max(maxItemText);
 const status = z.enum(['inbox', 'queued', 'working', 'blocked', 'completed']);
 const workspace = z.object({ id, label: z.string() });
-const agent = z.object({ id, label: z.string(), provider: z.string() });
+const agent = z.object({
+  id,
+  label: z.string(),
+  provider: z.string(),
+  dispatchStatus: z.enum(['ready', 'busy', 'needs-attention']).optional(),
+});
+const agentModel = z.object({
+  value: z.string(),
+  label: z.string(),
+  thinkingOptions: z.array(z.object({ id, label: z.string() })).optional(),
+});
+export type InboxAgentModel = z.infer<typeof agentModel>;
 const item = z.object({
   id,
   number: z.int().positive(),
@@ -168,12 +179,16 @@ export const startInboxBatch = defineRpc({
 export const listInboxAgentModels = defineRpc({
   name: 'inbox.agent-models',
   input: z.strictObject({ workspaceId: id.optional() }),
-  output: z.array(z.object({ value: z.string(), label: z.string() })),
+  output: z.array(agentModel),
 });
 
 export const startInboxBatchInNewChat = defineRpc({
   name: 'inbox.start-new',
-  input: workspaceId.extend({ itemIds: z.array(id).min(1).max(maxBatchItems) }),
+  input: workspaceId.extend({
+    itemIds: z.array(id).min(1).max(maxBatchItems),
+    model: id.optional(),
+    thinkingOptionId: id.optional(),
+  }),
   output: ack,
 });
 

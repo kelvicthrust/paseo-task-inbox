@@ -2,7 +2,7 @@ import { open, lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { BatchOutcome } from "../shared/outcome.ts";
-import type { BatchStatus, ImageType, ItemStatus, PullRequestClaim, TimelineCursor } from "./inbox-types.ts";
+import type { BatchStatus, ImageType, ItemStatus, NewChatConfig, PullRequestClaim, TimelineCursor } from "./inbox-types.ts";
 
 export interface Candidate extends PullRequestClaim {
   detail: string;
@@ -33,7 +33,7 @@ export interface Batch {
   directory: string;
   messageId: string;
   text: string;
-  newChat?: { model: string; attempts: number; attemptedAt: number };
+  newChat?: NewChatConfig & { attempts: number; attemptedAt: number };
   phase: "queued" | "delivering" | "sent" | "finished";
   status: BatchStatus;
   detail: string;

@@ -110,10 +110,13 @@ export default function contribute(server: PluginServerContext) {
   });
   server.handle(listInboxAgentModels, async ({ workspaceId }, { paseo }) =>
     (await withContext(paseo)).agentModels(workspaceId));
-  server.handle(startInboxBatchInNewChat, async ({ workspaceId, itemIds }, { paseo }) => {
-    const setting = await agentSettings.read();
-    if (setting.status !== 'ready') throw new Error('Repair the model selection in Task Inbox settings.');
-    await (await withContext(paseo)).startNew(workspaceId, itemIds, setting.values.model);
+  server.handle(startInboxBatchInNewChat, async ({ workspaceId, itemIds, model, thinkingOptionId }, { paseo }) => {
+    if (model === undefined) {
+      const setting = await agentSettings.read();
+      if (setting.status !== 'ready') throw new Error('Repair the model selection in Task Inbox settings.');
+      model = setting.values.model;
+    }
+    await (await withContext(paseo)).startNew(workspaceId, itemIds, model, thinkingOptionId);
     wake();
     return {};
   });

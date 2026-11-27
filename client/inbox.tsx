@@ -2,7 +2,7 @@ import { useRpc, useSettings, type PluginSurfaceProps } from '@getpaseo/plugin/c
 import { ExternalLink, Modal } from '@getpaseo/plugin/client/ui';
 import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
 import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent, type ScrollView, type TextInput } from 'react-native';
-import { taskInboxAgentSettings } from '../shared/agent.ts';
+import { taskInboxAgentSettings, taskInboxProviders } from '../shared/agent.ts';
 import {
   deleteInboxItem,
   issueUploadLink,
@@ -11,16 +11,39 @@ import {
   maxItemScreenshots,
   readInbox,
   readInboxItem,
+  startInboxBatch,
   startInboxBatchInNewChat,
   type InboxItemView,
+  type InboxView,
 } from '../shared/rpc.ts';
 import { Action, Copy, IconAction, Page, VerifiedPr, statusLabel, type Colors } from './controls.tsx';
 import { useKeyboardNavigation } from './browser-capture.tsx';
+import { DispatchChoice, DispatchPicker } from './dispatch-picker.tsx';
 import { TaskEditor, type ReadyInboxItem } from './editor.tsx';
 import { errorMessage, useInboxQuery } from './query.ts';
 
 type Operation = 'start' | 'edit' | 'delete' | 'attach';
 type FocusTarget = { kind: 'new' | 'edit' } | { kind: 'row'; id: string };
+type Destination = { kind: 'chat'; id: string; label: string; unavailable?: boolean } | { kind: 'new' };
+type Picker = 'chats' | 'models' | 'effort';
+type InboxAgent = InboxView['agents'][number];
+const unavailableChat = 'Choose an existing chat from this workspace.';
+
+function providerLabel(provider: string) {
+  return provider === 'codex' || provider === 'claude' ? taskInboxProviders[provider] : provider;
+}
+
+function modelLabel({ value, label }: { value: string; label: string }) {
+  const provider = providerLabel(value.split('/', 1)[0]);
+  const prefix = `${provider} · `;
+  return label.startsWith(prefix) ? label.slice(prefix.length) : label;
+}
+
+function dispatchStatus(agent?: InboxAgent) {
+  if (agent?.dispatchStatus === 'needs-attention') return 'Needs attention';
+  if (agent?.dispatchStatus === 'busy') return 'Busy';
+  return undefined;
+}
 
 export function WorkspaceInbox({
   host, layout, theme, navigation, workspaceId, workspaceName,
@@ -28,13 +51,18 @@ export function WorkspaceInbox({
   const read = useRpc(readInbox);
   const readItem = useRpc(readInboxItem);
   const deleteItem = useRpc(deleteInboxItem);
-  const start = useRpc(startInboxBatchInNewChat);
+  const startInChat = useRpc(startInboxBatch);
+  const startInNewChat = useRpc(startInboxBatchInNewChat);
   const issue = useRpc(issueUploadLink);
   const listModels = useRpc(listInboxAgentModels);
   const settings = useSettings(taskInboxAgentSettings);
   const models = useInboxQuery(() => listModels({ workspaceId }), 20_000);
   const { data, error, refresh } = useInboxQuery(() => read({ workspaceId }), 3_000);
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(() => new Set());
+  const [destination, setDestination] = useState<Destination | null>();
+  const [newChat, setNewChat] = useState<{ model: string; thinkingOptionId?: string }>();
+  const [picker, setPicker] = useState<Picker>();
+  const [footerHeight, setFooterHeight] = useState(0);
   const [busy, setBusy] = useState<Operation>();
   const [startError, setStartError] = useState<string>();
   const [rowError, setRowError] = useState<{ message: string; chatId?: string }>();
@@ -49,6 +77,10 @@ export function WorkspaceInbox({
   const newInput = useRef<TextInput>(null);
   const editInput = useRef<TextInput>(null);
   const scroll = useRef<ScrollView>(null);
+  const footer = useRef<View>(null);
+  const pickerPanel = useRef<View>(null);
+  const destinationButton = useRef<View>(null);
+  const effortButton = useRef<View>(null);
   const rowButtons = useRef(new Map<string, View>());
   const colors = theme.colors;
   const web = layout.platform === 'web';
@@ -99,17 +131,43 @@ export function WorkspaceInbox({
   const completed = data.items.filter(({ status }) => status === 'completed');
   const checkedIds = inbox.filter(({ id }) => !excluded.has(id)).map(({ id }) => id);
   const batch = data.batch?.status === 'completed' ? null : data.batch;
-  const model = settings.status === 'ready' ? models.data?.find(({ value }) => value === settings.values.model) : undefined;
-  const modelHint = model && !models.error ? undefined
-    : models.error ? 'Couldn’t check available agent models.'
-    : settings.status === 'loading' || !models.data ? 'Checking available agent models…'
-    : 'Choose an agent model in Settings → Plugins → Task Inbox agent.';
+  const selectedChat = destination?.kind === 'chat' && !destination.unavailable
+    ? data.agents.find(({ id }) => id === destination.id) : undefined;
+  const chatIdsByTitle = new Map<string, string[]>();
+  for (const { id, label } of data.agents) {
+    const title = label.trim();
+    const ids = chatIdsByTitle.get(title);
+    if (ids) ids.push(id);
+    else chatIdsByTitle.set(title, [id]);
+  }
+  const savedModel = settings.status === 'ready' && !models.error
+    ? models.data?.find(({ value }) => value === settings.values.model) : undefined;
+  const model = newChat ? models.data?.find(({ value }) => value === newChat.model) : savedModel;
+  const effortOptions = model?.thinkingOptions ?? [];
+  const effort = effortOptions.find(({ id }) => id === newChat?.thinkingOptionId);
+  const unavailableEffort = Boolean(newChat?.thinkingOptionId && !effort);
+  const newDestination = destination?.kind === 'new';
   const batchAgent = data.agents.find(({ id }) => id === batch?.agentId);
-  const canStart = !busy && !error && !editing && !deleting && data.canStart && Boolean(model) && !models.error &&
+  const activeBatch = !data.canStart;
+  const pickerDisabled = Boolean(activeBatch || busy || error || editing || deleting || upload);
+  const queue = dispatchStatus(selectedChat);
+  const canStart = !pickerDisabled && Boolean(selectedChat || (newDestination && model && !models.error && !unavailableEffort)) &&
     checkedIds.length > 0 && checkedIds.length <= maxBatchItems;
   const currentEdit = editing && data.items.find(({ id }) => id === editing.item.id);
   const currentDelete = deleting && data.items.find(({ id }) => id === deleting.id);
   const menuItem = menu && inbox.find(({ id }) => id === menu.id);
+
+  // Apply the default on the first successful view only. Polls must never change the target.
+  if (destination === undefined) {
+    const [soleChat] = data.agents;
+    setDestination(data.agents.length === 1
+      ? { kind: 'chat', id: soleChat.id, label: soleChat.label }
+      : data.agents.length === 0 ? { kind: 'new' } : null);
+  } else if (destination?.kind === 'chat' && !destination.unavailable && !selectedChat && !error) {
+    setDestination({ ...destination, unavailable: true });
+  }
+  if (newDestination && !newChat && savedModel) setNewChat({ model: savedModel.value });
+  if (picker && (pickerDisabled || (picker === 'effort' && !newDestination))) setPicker(undefined);
 
   function chatAction(id?: string) {
     if (id && navigation && data?.agents.some((agent) => agent.id === id)) {
@@ -127,6 +185,64 @@ export function WorkspaceInbox({
       const next = new Set(previous);
       if (!next.delete(id)) next.add(id);
       return next;
+    });
+  }
+
+  function closePicker() {
+    setPicker(undefined);
+    const trigger = picker === 'effort' && !models.error ? effortButton.current : undefined;
+    (trigger ?? destinationButton.current)?.focus();
+  }
+
+  function displayChatId({ id, label }: InboxAgent) {
+    const ids = chatIdsByTitle.get(label.trim());
+    if (!ids || ids.length < 2) return undefined;
+    const prefix = id.slice(0, 8);
+    if (!ids.some((other) => other !== id && other.startsWith(prefix))) return prefix;
+    const suffix = id.slice(-8);
+    if (!ids.some((other) => other !== id && other.endsWith(suffix))) return `…${suffix}`;
+    return id;
+  }
+
+  function openPicker(next: Picker) {
+    setMenu(undefined);
+    setPicker(next);
+  }
+
+  function selectChat(chat: InboxAgent) {
+    setDestination({ kind: 'chat', id: chat.id, label: chat.label });
+    setStartError(undefined);
+    closePicker();
+  }
+
+  function selectModel(value: string) {
+    if (value !== newChat?.model || (unavailableEffort && !effortOptions.length)) setNewChat({ model: value });
+    setDestination({ kind: 'new' });
+    setStartError(undefined);
+    closePicker();
+  }
+
+  function selectEffort(thinkingOptionId?: string) {
+    if (model) setNewChat({ model: model.value, thinkingOptionId });
+    setStartError(undefined);
+    closePicker();
+  }
+
+  function startBatch() {
+    if (!canStart) return;
+    const input = { workspaceId, itemIds: checkedIds };
+    void act('start', async () => {
+      if (selectedChat) {
+        await startInChat({ ...input, agentId: selectedChat.id });
+      } else if (newDestination && model) {
+        await startInNewChat({ ...input, model: model.value, ...(effort ? { thinkingOptionId: effort.id } : {}) });
+      }
+    }, (message) => {
+      if (message === unavailableChat && destination?.kind === 'chat') {
+        setDestination({ ...destination, unavailable: true });
+      }
+      if (message && newDestination) void models.refresh();
+      setStartError(message);
     });
   }
 
@@ -206,30 +322,160 @@ export function WorkspaceInbox({
     });
   }
 
+  const selectedChatId = selectedChat && displayChatId(selectedChat);
+  const destinationLabel = activeBatch ? batchAgent?.label ?? 'Batch destination'
+    : destination?.kind === 'chat' ? selectedChat?.label ?? destination.label
+    : newDestination ? model ? modelLabel(model) : 'New chat'
+    : 'Choose a destination';
+  const destinationDetail = activeBatch ? undefined
+    : selectedChat ? `${selectedChatId ?? 'Existing chat'} · ${queue ?? providerLabel(selectedChat.provider)}`
+    : destination?.kind === 'chat' ? 'Chat unavailable'
+    : newDestination ? model ? `New chat · ${providerLabel(model.value.split('/', 1)[0])}` : 'Choose a model'
+    : 'Existing or new chat';
+  const destinationHint = activeBatch ? undefined
+    : destination?.kind === 'chat' && destination.unavailable ? 'Choose a destination to start.'
+    : selectedChat?.dispatchStatus === 'needs-attention' ? 'This batch will wait until the selected chat is ready.'
+    : newDestination && models.error ? 'Couldn’t load models. Use Send to to retry.'
+    : newDestination && newChat && !model ? 'This model is unavailable. Choose a model again.'
+    : newDestination && unavailableEffort ? 'This effort is unavailable. Choose again.'
+    : undefined;
+  const taskLabel = checkedIds.length ? `${checkedIds.length} ${checkedIds.length === 1 ? 'task' : 'tasks'}` : 'tasks';
+  const sendLabel = activeBatch ? 'Batch active'
+    : busy === 'start' ? queue ? 'Queueing…' : 'Starting…'
+    : `${queue ? 'Queue' : 'Start'} ${taskLabel}`;
+  const pickerView = picker === 'chats' && !data.agents.length ? 'models' : picker;
+  const effortLabel = effort?.label ?? (unavailableEffort ? 'Choose effort' : 'Default');
+  const showEffort = !activeBatch && newDestination && effortOptions.length > 0;
+  const destinationAccessibilityLabel = !activeBatch && selectedChat && selectedChatId
+    ? ['Send to', destinationLabel, `Chat ID ${selectedChatId}`, providerLabel(selectedChat.provider), queue]
+    : ['Send to', destinationLabel, destinationDetail];
+
   const batchFooter = (
-    <>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-        <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-          <Copy colors={colors} heading size={13}>{checkedIds.length} selected</Copy>
-          {model && <Copy colors={colors} muted size={12}>{model.label}</Copy>}
-        </View>
-        <Action
-          colors={colors}
-          label={busy === 'start' ? 'Starting…' : !data.canStart ? 'Batch active' : checkedIds.length ? `Start ${checkedIds.length} ${checkedIds.length === 1 ? 'task' : 'tasks'}` : 'Start work'}
-          icon="Play"
-          primary compact={web}
-          disabled={!canStart}
-          onPress={() => {
-            if (!canStart) return;
-            void act('start', async () => { await start({ workspaceId, itemIds: checkedIds }); }, setStartError);
-          }}
-        />
+    <View
+      ref={footer} collapsable={false} style={{ gap: 6 }}
+      onLayout={({ nativeEvent }) => setFooterHeight(nativeEvent.layout.height)}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <Copy colors={colors} muted size={12}>Send to</Copy>
+        <Copy colors={colors} muted size={12}>{checkedIds.length} selected</Copy>
       </View>
-      {modelHint && <Copy colors={colors} muted size={12}>{modelHint}</Copy>}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 7 }}>
+        <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
+          <DispatchChoice
+            colors={colors} label={destinationLabel} detail={destinationDetail}
+            icon={newDestination && !activeBatch ? 'Plus' : 'MessageSquare'} trailingIcon="ChevronDown"
+            accessibilityLabel={destinationAccessibilityLabel.filter(Boolean).join(', ')}
+            compact={web} trigger disabled={pickerDisabled}
+            expanded={Boolean(pickerView && pickerView !== 'effort')} focusRef={destinationButton}
+            onPress={() => pickerView && pickerView !== 'effort'
+              ? closePicker()
+              : openPicker(data.agents.length ? 'chats' : 'models')}
+          />
+          {showEffort && (
+            <DispatchChoice
+              colors={colors} label={`Effort · ${effortLabel}`} trailingIcon="ChevronDown"
+              accessibilityLabel={`Effort, ${effortLabel}`}
+              compact={web} trigger disabled={pickerDisabled || Boolean(models.error)}
+              expanded={pickerView === 'effort'} focusRef={effortButton}
+              onPress={() => pickerView === 'effort' ? closePicker() : openPicker('effort')}
+            />
+          )}
+        </View>
+        <View style={{ paddingBottom: web ? 5 : 0 }}>
+          <Action colors={colors} label={sendLabel} icon={queue ? 'Clock' : 'Play'}
+            primary compact={web} disabled={!canStart} onPress={startBatch} />
+        </View>
+      </View>
+      {destinationHint && <Copy colors={colors} muted size={12}>{destinationHint}</Copy>}
       {checkedIds.length > maxBatchItems && <Copy colors={colors} error size={12}>Select up to {maxBatchItems} tasks for one batch.</Copy>}
       {editing && !batch && <Copy colors={colors} muted size={12}>Close the editor before starting work.</Copy>}
       {startError && <Copy colors={colors} error size={13}>{startError}</Copy>}
-    </>
+    </View>
+  );
+
+  const dispatchPicker = pickerView && !pickerDisabled && (
+    <DispatchPicker
+      key={pickerView} anchor={footer} anchorHeight={footerHeight} panel={pickerPanel}
+      colors={colors} web={web} dismiss={closePicker}
+      title={pickerView === 'chats' ? 'Choose a destination' : pickerView === 'models' ? 'Choose a model for a new chat' : 'Choose effort'}
+    >
+      {pickerView === 'chats' && (
+        <>
+          <View style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+            <Copy colors={colors} heading muted size={12}>Existing chats</Copy>
+          </View>
+          {data.agents.map((chat) => {
+            const id = displayChatId(chat);
+            const provider = providerLabel(chat.provider);
+            const status = dispatchStatus(chat);
+            return (
+              <DispatchChoice
+                key={chat.id} colors={colors} label={chat.label} detail={id ? `${id} · ${provider}` : provider}
+                accessibilityLabel={id ? [chat.label, `Chat ID ${id}`, provider, status].filter(Boolean).join(', ') : undefined}
+                icon="MessageSquare" status={status} compact={web}
+                selected={selectedChat?.id === chat.id} onPress={() => selectChat(chat)}
+              />
+            );
+          })}
+          <View style={{ borderTopWidth: 1, borderColor: colors.border, marginTop: 4, paddingTop: 4 }}>
+            <DispatchChoice colors={colors} label="New chat" detail="Choose a model" icon="Plus"
+              trailingIcon="ChevronRight" compact={web} onPress={() => openPicker('models')} />
+          </View>
+        </>
+      )}
+      {pickerView === 'models' && (
+        <>
+          {data.agents.length ? (
+            <DispatchChoice colors={colors} label="New chat · Choose model" icon="ArrowLeft" compact={web}
+              accessibilityLabel="Back to existing chats" onPress={() => openPicker('chats')} />
+          ) : (
+            <View style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+              <Copy colors={colors} heading muted size={12}>New chat · Choose model</Copy>
+            </View>
+          )}
+          {models.error ? (
+            <View style={{ padding: 8, gap: 4 }}>
+              <Copy colors={colors} error size={12}>Couldn’t load available models.</Copy>
+              <Action colors={colors} label="Retry models" compact={web} onPress={() => {
+                pickerPanel.current?.focus();
+                void models.refresh();
+              }} />
+            </View>
+          ) : models.data?.length ? models.data.map((option) => (
+            <DispatchChoice key={option.value} colors={colors} label={modelLabel(option)}
+              detail={providerLabel(option.value.split('/', 1)[0])} icon="Plus" compact={web}
+              selected={model?.value === option.value} onPress={() => selectModel(option.value)} />
+          )) : (
+            <View style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+              <Copy colors={colors} muted size={12}>
+                {models.data ? 'No models available on this host.' : 'Loading available models…'}
+              </Copy>
+            </View>
+          )}
+        </>
+      )}
+      {pickerView === 'effort' && (
+        <>
+          <View style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+            <Copy colors={colors} heading muted size={12}>Effort</Copy>
+          </View>
+          {models.error || !showEffort ? (
+            <View style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+              <Copy colors={colors} muted size={12}>Effort options are unavailable. Choose a model again.</Copy>
+            </View>
+          ) : (
+            <>
+              <DispatchChoice colors={colors} label="Default" compact={web}
+                selected={!newChat?.thinkingOptionId} onPress={() => selectEffort()} />
+              {effortOptions.map(({ id, label }) => (
+                <DispatchChoice key={id} colors={colors} label={label} compact={web}
+                  selected={effort?.id === id} onPress={() => selectEffort(id)} />
+              ))}
+            </>
+          )}
+        </>
+      )}
+    </DispatchPicker>
   );
 
   const taskMenu = menu && menuItem && (
@@ -241,7 +487,7 @@ export function WorkspaceInbox({
   );
 
   return (
-    <Page theme={theme} footer={batchFooter} overlay={taskMenu} scrollRef={scroll}>
+    <Page theme={theme} footer={batchFooter} overlay={dispatchPicker || taskMenu} scrollRef={scroll}>
       {workspaceName && <Copy colors={colors} heading size={19}>{workspaceName}</Copy>}
       <View style={editing ? { display: 'none' } : undefined}>
         <TaskEditor
