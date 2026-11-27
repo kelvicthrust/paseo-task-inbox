@@ -2,7 +2,7 @@
 
 [![npm version](https://badgen.net/npm/v/@kelvicthrust/paseo-task-inbox)](https://www.npmjs.com/package/@kelvicthrust/paseo-task-inbox)
 
-Capture bugs and screenshots while you test in Paseo. Start a batch from the workspace’s right-side Explorer and Task Inbox opens a Codex or Claude Code chat to work on it. Keep capturing bugs while the agent works, and find verified fixes with links to their pull requests.
+Capture bugs and screenshots while you test in Paseo. Send a batch from the workspace’s right-side Explorer to an existing chat or start a new Codex or Claude Code chat. Keep capturing bugs while the agent works, and find verified fixes with links to their pull requests.
 
 ![Task Inbox in Explorer with a screenshot attached to the draft and a floating Edit task and Delete task menu](assets/task-inbox.png)
 
@@ -34,6 +34,8 @@ Use a versioned npm source to test a particular release directly.
 paseo plugin install 'npm:@kelvicthrust/paseo-task-inbox@1.0.1'
 ```
 
+The workflow below describes the source checkout. For the published version, see the [1.0.1 usage guide](https://github.com/kelvicthrust/paseo-task-inbox/blob/v1.0.1/README.md#capture-and-send-bugs).
+
 ### Install from source
 
 On the daemon host, use Node.js 26 and npm to install from a checkout.
@@ -49,20 +51,18 @@ paseo plugin install "$PWD"
 
 Run `paseo plugin ls task-inbox` and look for **running**. If your daemon uses a custom home, pass `--home /path/to/paseo-home` to the install and status commands. In your workspace, open **+ → Task Inbox** in the right-side Explorer. You can also choose **Open Task Inbox** in the workspace Command Center to open or focus the same tab.
 
-Before you send your first batch, go to **Settings → Plugins → Task Inbox**. On the **Task Inbox agent** tab, select the Codex or Claude Code model to use on that host.
-
 ## Capture and send bugs
 
 1. Describe what went wrong. On Desktop or web, add a PNG or JPEG with **Attach**, paste it into the composer, or drop it there. Check the preview, then select **Add task** when the uploads finish.
 2. Open a waiting task’s **⋯** menu to make a correction. Choose **Edit task** to update the description or screenshots, then select **Save changes** or **Cancel**. To remove the task and its images, choose **Delete task** from the menu and confirm. Once a batch claims a task, its contents are fixed.
-3. Select the tasks to fix, check the model in the footer, and start the batch. Task Inbox creates a visible chat in that workspace, even when the main pane shows a terminal.
+3. Select the tasks to fix and check **Send to** in the footer. Task Inbox preselects a sole eligible chat. If several are available, pick the chat you want. Select **Start tasks**, or **Queue tasks** to wait for a busy chat.
 4. Follow the batch in Task Inbox or select **Open chat**. You can keep capturing reports while the batch runs. Switching tabs or reloading returns you to the same batch and chat.
 
 If a screenshot upload fails, select **Retry upload** beside the image or remove it to continue. If Task Inbox can’t confirm a save, select **Retry save** to finish the same request without creating a duplicate.
 
 All chats in the workspace share one inbox. Task Inbox allows one active batch per workspace, with up to 20 bugs and 24 MiB of images per batch. Each bug can have up to four images of 8 MiB each.
 
-If the batch footer asks for a model, choose an available one in **Task Inbox agent**. You can still capture bugs and attach screenshots.
+To launch a separate chat, choose **Send to → New chat** and pick a model. If the workspace has no eligible chats, **Send to** opens the model choices directly. Models with supported effort levels have an **Effort** picker. Leave it at **Default** to let Paseo resolve the effort. A model saved in **Settings → Plugins → Task Inbox agent** can prefill the new-chat model.
 
 ### Attach screenshots from native mobile
 

@@ -1,8 +1,10 @@
 import type { BatchOutcome } from "../shared/outcome.ts";
+import type { InboxAgentModel } from "../shared/rpc.ts";
 
 export type ImageType = "image/png" | "image/jpeg";
 export type ItemStatus = "inbox" | "queued" | "working" | "blocked" | "completed";
 export type BatchStatus = Exclude<ItemStatus, "inbox">;
+export type NewChatConfig = { model: string; thinkingOptionId?: string };
 
 export interface InboxWorkspace {
   id: string;
@@ -65,8 +67,8 @@ export interface InboxHost {
   workspace(id: string): Promise<InboxWorkspace | null>;
   agents(workspaceId: string): Promise<InboxAgent[]>;
   agent(id: string): Promise<InboxAgent | null>;
-  agentModels(workspace?: InboxWorkspace): Promise<{ value: string; label: string }[]>;
-  createAgent(workspace: InboxWorkspace, input: { agentId: string; batchId: string; model: string }): Promise<void>;
+  agentModels(workspace?: InboxWorkspace, provider?: string): Promise<InboxAgentModel[]>;
+  createAgent(workspace: InboxWorkspace, input: { agentId: string; batchId: string } & NewChatConfig): Promise<void>;
   repository(workspace: InboxWorkspace): Promise<string | null>;
   timeline(agentId: string, cursor: TimelineCursor | null): Promise<TimelinePage>;
   send(agentId: string, message: BatchMessage): Promise<void>;

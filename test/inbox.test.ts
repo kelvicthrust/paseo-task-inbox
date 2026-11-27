@@ -469,24 +469,65 @@ test("new batches validate their workspace, items and model before creating a ch
   assert.equal(f.state.sent.length, 0);
 });
 
+test("an explicit effort must still belong to the selected model before chat creation", async (t) => {
+  const f = await fixture(t);
+  let thinkingOptions = [{ id: "high", label: "High" }];
+  let catalogUnavailable = false;
+  f.host.agentModels = async () => {
+    if (catalogUnavailable) throw new Error("Provider catalog connection lost");
+    return [{ value: "codex/demo", label: "Codex · Demo", thinkingOptions }];
+  };
+  let created = false;
+  f.host.createAgent = async () => { created = true; };
+  await f.inbox.add(workspace.id, "Fix export");
+  const [item] = (await f.inbox.view(workspace.id)).items;
+
+  await assert.rejects(f.inbox.startNew(workspace.id, [item.id], "codex/demo", "max"), /effort is unavailable/);
+  assert.equal((await f.inbox.view(workspace.id)).batch, null);
+
+  await f.inbox.startNew(workspace.id, [item.id], "codex/demo", "high");
+  catalogUnavailable = true;
+  await f.inbox.tick();
+  const waiting = await f.inbox.view(workspace.id);
+  assert.equal(waiting.canStart, false);
+  assert.equal(waiting.items[0].status, "queued");
+  assert.match(waiting.batch!.detail, /will try again/);
+  assert.equal(created, false);
+
+  catalogUnavailable = false;
+  thinkingOptions = [];
+  await f.inbox.tick();
+  const view = await f.inbox.view(workspace.id);
+  assert.equal(view.canStart, true);
+  assert.equal(view.items[0].status, "inbox");
+  assert.equal(view.items[0].chatId, undefined);
+  assert.match(view.batch!.detail, /effort is unavailable/);
+  assert.equal(created, false);
+});
+
 test("unconfirmed creation retries with the reserved identity and leaves the reports blocked", async (t) => {
   const f = await fixture(t);
-  const attempts: { agentId: string; batchId: string; model: string }[] = [];
-  f.host.agentModels = async () => [{ value: "codex/demo", label: "Codex · Demo" }];
+  const attempts: Parameters<InboxHost["createAgent"]>[1][] = [];
+  f.host.agentModels = async () => [{
+    value: "codex/demo", label: "Codex · Demo", thinkingOptions: [{ id: "high", label: "High" }],
+  }];
   f.host.createAgent = async (_workspace, request) => {
     attempts.push(request);
     throw new Error("creation reply was lost");
   };
   await f.inbox.add(workspace.id, "Fix search");
   const [item] = (await f.inbox.view(workspace.id)).items;
-  await f.inbox.startNew(workspace.id, [item.id], "codex/demo");
-  for (let tick = 0; tick < 4; tick++) {
+  await f.inbox.startNew(workspace.id, [item.id], "codex/demo", "high");
+  await f.inbox.tick();
+  f.state.clock += 60_000;
+  await f.restart();
+  for (let tick = 0; tick < 3; tick++) {
     await f.inbox.tick();
     f.state.clock += 60_000;
   }
   const view = await f.inbox.view(workspace.id);
   assert.deepEqual(attempts, Array.from({ length: 3 }, () => ({
-    agentId: view.batch!.agentId, batchId: view.batch!.id, model: "codex/demo",
+    agentId: view.batch!.agentId, batchId: view.batch!.id, model: "codex/demo", thinkingOptionId: "high",
   })));
   assert.equal(view.items[0].status, "blocked");
   assert.match(view.batch!.detail, /could not confirm creation/);
@@ -509,6 +550,12 @@ test("the workspace inbox can target either chat and a started batch stays with 
   await f.inbox.add(anotherWorkspace.id, "Private capture");
   const { items: [item], agents } = await f.inbox.view(workspace.id);
   assert.deepEqual(agents.map(({ id }) => id), [agent.id, otherChat.id]);
+  assert.deepEqual(agents.map(({ dispatchStatus }) => dispatchStatus), ["ready", "ready"]);
+  f.state.agent = { ...agent, status: "running" };
+  assert.equal((await f.inbox.view(workspace.id)).agents[0].dispatchStatus, "busy");
+  f.state.agent = { ...agent, pendingPermission: true };
+  assert.equal((await f.inbox.view(workspace.id)).agents[0].dispatchStatus, "needs-attention");
+  f.state.agent = agent;
   await assert.rejects(f.inbox.start(workspace.id, foreignChat.id, [item.id]), /existing chat from this workspace/);
   await f.inbox.start(workspace.id, agent.id, [item.id]);
   const { batch } = await f.inbox.view(workspace.id);

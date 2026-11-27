@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { PaseoAgent, PaseoApi, PaseoAgentTimelineHandle } from "@getpaseo/client";
+import type { PaseoAgent, PaseoApi, PaseoAgentTimelineHandle, PaseoWorkspaceHandle } from "@getpaseo/client";
 import { createPaseoHost } from "../server/paseo.ts";
 
 type Page = Awaited<ReturnType<PaseoAgentTimelineHandle["refetch"]>>;
@@ -44,6 +44,52 @@ test("projects unarchived persisted dormant chats as resumable and rejects archi
   assert.equal((await host.agent(agentId))?.resumable, true);
   snapshot.archivedAt = "2026-11-23T17:00:00Z";
   assert.equal(await host.agent(agentId), null);
+});
+
+test("lists model-specific effort and creates workspace chats with an optional override", async () => {
+  const workspace = { id: workspaceId, label: "Example workspace", directory: "/workspace" };
+  const created: Parameters<PaseoWorkspaceHandle["agents"]["create"]>[0][] = [];
+  const requests: string[] = [];
+  let catalogError = false;
+  const paseo = {
+    providers: {
+      listAvailable: async () => ({ providers: [
+        { provider: "codex", available: true }, { provider: "claude", available: true },
+      ], error: null }),
+      listModels: async (provider: string, { cwd }: { cwd: string }) => {
+        requests.push(provider);
+        assert.equal(cwd, workspace.directory);
+        if (provider === "claude") return { error: "Claude provider is starting" };
+        if (catalogError) return { error: "Provider is starting" };
+        return { models: [
+          { id: "demo", label: "Demo", thinkingOptions: [{ id: "high", label: "High", description: "Higher effort" }] },
+          { id: "hidden", label: "Hidden", isSelectable: false },
+        ] };
+      },
+    },
+    workspaces: { ref: (id: string) => {
+      assert.equal(id, workspaceId);
+      return { agents: { create: async (input: (typeof created)[number]) => {
+        created.push(input);
+        return { id: input.agentId };
+      } } };
+    } },
+  } as unknown as PaseoApi;
+  const host = createPaseoHost(paseo, () => paseo);
+  assert.deepEqual(await host.agentModels(workspace), [{
+    value: "codex/demo", label: "Codex · Demo", thinkingOptions: [{ id: "high", label: "High" }],
+  }]);
+  assert.deepEqual(requests.splice(0), ["codex", "claude"]);
+  assert.equal((await host.agentModels(workspace, "codex")).length, 1);
+  assert.deepEqual(requests, ["codex"]);
+  catalogError = true;
+  await assert.rejects(host.agentModels(workspace, "codex"), /could not check available Codex models/);
+  await host.createAgent(workspace, { agentId: "chat-1", batchId: "batch-1", model: "codex/demo" });
+  await host.createAgent(workspace, { agentId: "chat-2", batchId: "batch-2", model: "codex/demo", thinkingOptionId: "high" });
+  assert.deepEqual(created.map(({ agentId, idempotencyKey, config }) => ({ agentId, idempotencyKey, config })), [
+    { agentId: "chat-1", idempotencyKey: "task-inbox:batch-1", config: { provider: "codex/demo" } },
+    { agentId: "chat-2", idempotencyKey: "task-inbox:batch-2", config: { provider: "codex/demo", thinkingOptionId: "high" } },
+  ]);
 });
 
 test("reads 0.16.1 projected pages without consuming a growing assistant row", async () => {
